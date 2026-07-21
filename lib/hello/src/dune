@@ -1,0 +1,6 @@
+(library
+ (name sandbox_hello)
+ (public_name sandbox.hello)
+ (libraries core)
+ (preprocess
+  (pps ppx_jane)))

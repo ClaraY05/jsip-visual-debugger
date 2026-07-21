@@ -1,0 +1,46 @@
+name: CI
+
+# Build the project, run the test suite, and check formatting on every push to
+# main and every pull request. Uses ocaml/setup-ocaml to install a fresh opam
+# switch and the project's dependencies, so the workflow is self-contained --
+# no prebuilt image required.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+# Cancel an in-progress run if a newer commit is pushed to the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.2"
+
+      - name: Install dependencies
+        run: opam install . --deps-only --with-test
+
+      - name: Build
+        run: opam exec -- dune build
+
+      - name: Run tests
+        run: opam exec -- dune runtest
+
+      # Runs last so build/test results are always visible even if formatting
+      # is off. `dune build @fmt` only checks formatting; locally, `dune fmt`
+      # reformats in place.
+      - name: Check formatting
+        run: opam exec -- dune build @fmt

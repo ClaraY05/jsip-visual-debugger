@@ -1,0 +1,6 @@
+(library
+ (name sandbox_hello_test)
+ (libraries sandbox_hello expect_test_helpers_core core)
+ (inline_tests)
+ (preprocess
+  (pps ppx_jane)))
