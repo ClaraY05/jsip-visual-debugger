@@ -56,3 +56,10 @@ bin/main.ml       example executable
 ```
 
 See `CLAUDE.md` for the full code conventions.
+
+## Submodules
+This project contains submodules of other repositories
+
+To update the copies of the submodules run `git submodule update --remote --merge`
+
+These updates must be committed to the repo.
