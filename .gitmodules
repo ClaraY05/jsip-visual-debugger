@@ -4,3 +4,5 @@
 [submodule "jsip-debugger-interface"]
 	path = jsip-debugger-interface
 	url = https://github.com/wuad391/jsip-debugger-interface
+[submodule "./jsip_debugger/"]
+	url = https://github.com/ClaraY05/jsip-debugger-compiler
