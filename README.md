@@ -1,6 +1,20 @@
-# OCaml project template
+# jsip-visual-debugger
 
-A blank OCaml project in the Jane Street style: [`Core`](https://opam.ocaml.org/packages/core/)
+The outer shell of the JSIP visual replay debugger. One command runs the
+whole pipeline — compile a program with the forked, instrumenting
+compiler, capture its replay dump, and hand the dump to the interface:
+
+```sh
+git submodule update --init --recursive   # once, after cloning
+./cool_name.sh examples/greet.ml
+```
+
+The first run also builds the forked compiler (~10 min). See `CLAUDE.md`
+for how the pieces fit together.
+
+---
+
+Based on an OCaml project template in the Jane Street style: [`Core`](https://opam.ocaml.org/packages/core/)
 as the standard library, `ppx_jane` for deriving, `dune` for builds, expect
 tests, and the `janestreet` ocamlformat profile. Wired up with GitHub Actions
 and the Claude GitHub Action.

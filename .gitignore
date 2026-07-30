@@ -17,3 +17,6 @@ _build/
 .claude/settings.local.json
 .claude/worktrees
 CLAUDE.local.md
+
+# cool_name.sh working area: instrumented builds, dumps, toolchain logs.
+/_vreplay/
