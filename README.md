@@ -10,8 +10,10 @@ git submodule update --init --recursive   # once, after cloning
 ./cool_name.sh examples/map_demo.ml
 ```
 
-The first run also builds the forked compiler (~10 min). See `CLAUDE.md`
-for how the pieces fit together.
+The first run also builds the forked compiler (~10 min). Target
+programs are stdlib-only for now — no `open Core`/`Base`; `Map`, `Set`,
+`Queue`, and `Hashtbl` calls are the instrumented ones. See `CLAUDE.md`
+for how the pieces fit together and the plan to lift this.
 
 ---
 

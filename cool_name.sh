@@ -36,6 +36,18 @@ esac
 [ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
   die "submodules missing; run: git submodule update --init --recursive"
 
+# The fork is upstream-trunk OCaml with only its own stdlib; the opam
+# switch's Core/Base are built by a different compiler (OxCaml) and
+# cannot be linked into a fork-compiled program. Fail with the reason
+# up front rather than an "Unbound module Core" from inside dune.
+if grep -qE '^[[:space:]]*open!?[[:space:]]+(Core|Base|Async)\b' "$prog"; then
+  die "this program opens Core/Base/Async, which the forked compiler \
+cannot link (it ships only the OCaml stdlib, and the opam switch's \
+libraries are built by an incompatible compiler). Use stdlib modules -- \
+Map/Set/Queue/Hashtbl are the tracked ones. See CLAUDE.md for the plan \
+to lift this."
+fi
+
 name="$(basename "${prog%.ml}")"
 work="$root/_vreplay/$name"
 dump="$work/$name.dump"

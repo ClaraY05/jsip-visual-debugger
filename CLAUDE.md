@@ -28,22 +28,22 @@ and watch the call stack, source position, and heap shapes evolve.
 `git clone --recurse-submodules`, or after the fact
 `git submodule update --init --recursive` (the compiler has its own
 `flexdll` submodule, hence `--recursive`). Each submodule is pinned to
-the work branch named in `.gitmodules` — compiler:
-`fix/walker-correctness`, interface: `worktree-debugger-tui` — so to
+the work branch named in `.gitmodules` — compiler: `vreplay-main`
+(its integration branch), interface: `worktree-debugger-tui` — so to
 pick up new submodule commits: `git submodule update --remote --merge`,
-then commit the bumped pointers here. Those are the currently-active
-branches; as they merge, re-pin to the trunks (`vreplay-main` for the
-compiler, `main` for the interface). Submodules check out detached;
-don't develop inside them from this repo — push branches in their own
-repos, then bump the pointer.
+then commit the bumped pointers here. Re-pin the interface to `main`
+once the TUI branch merges. Submodules check out detached; don't
+develop inside them from this repo — push branches in their own repos,
+then bump the pointer.
 
 ### jsip-debugger-compiler
 
 Fork of `ocaml/ocaml` trunk (5.6.0+dev0) at
 <https://github.com/ClaraY05/jsip-debugger-compiler>, pinned to
-`fix/walker-correctness` — the fork's `vreplay-main` integration
-branch plus emit-sink and walker fixes (`c/snapshot` and
-`c/vreplay-registry-dynarray` are earlier phases). What the fork adds:
+`vreplay-main` — the fork's integration branch, with the
+`fix/walker-correctness` emit-sink and walker fixes merged in
+(`c/snapshot` and `c/vreplay-registry-dynarray` are earlier phases).
+What the fork adds:
 
 - `Clflags.visual_replay` (the `-visual-replay` flag) gates everything.
 - `typing/vreplay_instrumentation.ml{,i}` rewrites the typedtree,
@@ -127,6 +127,18 @@ stdlib-only, single-file program; try
 4. Builds the interface and execs the TUI on the dump, with
    `-source-root` pointed at the scratch project so the source pane
    resolves. `q` quits, back to your shell.
+
+Target programs are **stdlib-only** — no `open Core`/`Base` (cool_name
+rejects them up front). This is a toolchain-lineage limit, not a dune
+setting: the fork is upstream-trunk OCaml with only its own stdlib,
+while the opam switch's Core/Base (and every ppx) are built by the
+OxCaml `5.2.0+ox` compiler — incompatible interfaces and object
+format, so no `-I`/findlib incantation can link them. Lifting it means
+porting the vreplay patches onto the OxCaml compiler so the whole
+switch (Core, ppx, dune-with-findlib) just works; the interface's
+`worktree-core-ds-support` branch already stages the interface side
+(`Core_map`/`Core_set`/`Core_queue` in the snapshot catalogue, ready
+for the compiler's `Data_structure.t` to grow the same constructors).
 
 ## Build, test, format
 
