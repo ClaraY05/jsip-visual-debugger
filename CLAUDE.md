@@ -12,15 +12,16 @@ dune, expect tests).
 
 The pipeline, all driven by `./cool_name.sh path/to/program.ml`: the
 **compiler** submodule (an `ocaml/ocaml` fork), behind a
-`-visual-replay` flag, instruments a program so that running it prints
-replay events to stdout, interleaved with the program's own output;
-cool_name captures that as the dump. The **interface** submodule parses
-the dump into a call stack and will render it as a web UI for stepping
-through the run. The wire format is line-oriented
-`{FUNCTION(...) ARGUMENTS(...) LOCATION(...)` records with `{`/`}`
-nesting for the call tree (see `app/bin/dummy.txt` in the interface
-repo for the target shape); today's compiler still emits bare braces —
-see the compiler section.
+`-visual-replay` flag, instruments calls involving tracked data
+structures (stdlib `Map`/`Set`/`Queue`/`Hashtbl`) so the running
+program logs one event per call — its location, arguments, the live
+registry, and a walked snapshot of the structure's heap shape — as one
+`(event ...)` sexp per line, with `{`/`}` markers tracking call depth.
+The log goes to its own sink (`VREPLAY_FILE=<path>`, or `VREPLAY_SOCK`
+for a live socket listener, default `./vreplay.dump`), never stdout,
+so program output cannot corrupt it. The **interface** submodule is a
+GDB-style bonsai_term TUI that replays a dump: step through the run
+and watch the call stack, source position, and heap shapes evolve.
 
 ## Submodules
 
@@ -28,95 +29,104 @@ see the compiler section.
 `git submodule update --init --recursive` (the compiler has its own
 `flexdll` submodule, hence `--recursive`). Each submodule is pinned to
 the work branch named in `.gitmodules` — compiler:
-`c/vreplay-registry-dynarray`, interface: `parsing` — so to pick up new
-submodule commits: `git submodule update --remote --merge`, then commit
-the bumped pointers here. Submodules check out detached; don't develop
-inside them from this repo — push branches in their own repos, then
-bump the pointer.
+`fix/walker-correctness`, interface: `worktree-debugger-tui` — so to
+pick up new submodule commits: `git submodule update --remote --merge`,
+then commit the bumped pointers here. Those are the currently-active
+branches; as they merge, re-pin to the trunks (`vreplay-main` for the
+compiler, `main` for the interface). Submodules check out detached;
+don't develop inside them from this repo — push branches in their own
+repos, then bump the pointer.
 
 ### jsip-debugger-compiler
 
 Fork of `ocaml/ocaml` trunk (5.6.0+dev0) at
-<https://github.com/ClaraY05/jsip-debugger-compiler>, pinned to the
-`c/vreplay-registry-dynarray` branch — the current line of work
-(`c/snapshot` is the superseded prototype). What the branch adds:
+<https://github.com/ClaraY05/jsip-debugger-compiler>, pinned to
+`fix/walker-correctness` — the fork's `vreplay-main` integration
+branch plus emit-sink and walker fixes (`c/snapshot` and
+`c/vreplay-registry-dynarray` are earlier phases). What the fork adds:
 
 - `Clflags.visual_replay` (the `-visual-replay` flag) gates everything.
-- `typing/vreplay_instrumentation.ml{,i}` — `inject_instrumentation`
-  rewrites the typedtree to wrap function calls; `Wire.t` carries the
-  location, function type/data, and `Texp_apply` argument list of each
-  call site. Injection is mid-flight: it currently hardcodes
-  `call_c_node "meow"` and the real formatting path is commented out,
-  which is why dumps today are bare brace nesting, not full records.
-- `vreplay/` — runtime library auto-linked into instrumented programs
+- `typing/vreplay_instrumentation.ml{,i}` rewrites the typedtree,
+  wrapping calls whose arguments or result involve a structure from
+  the catalogue (currently stdlib `Map`, `Set`, `Queue`, `Hashtbl`).
+- `vreplay/` — runtime library auto-linked under the flag
   (`bytecomp/bytelink.ml` inserts `vreplay.cma` after `stdlib.cma`;
-  `driver/compmisc.ml` puts `+vreplay` on the load path).
-  `Vreplay.snapshot ~loc ~fn ~ds root` gives tracked values stable ids
-  (held weakly in a dynarray registry) and walks their heap shape.
-  `ds_info` is the hand-authored table of data structures it can walk,
-  keyed by module name (e.g. `"Map"`).
-- `runtime/snapshot.c` — the `caml_wire_emit` primitive; instrumented
-  bytecode must therefore run under the fork's own `ocamlrun`.
+  `driver/compmisc.ml` puts `+vreplay` on the load path). It assigns
+  tracked values stable ids in a weak registry and walks their heap
+  shape for each event's snapshot.
+- `runtime/snapshot.c` — the `caml_wire_emit` primitive and the dump
+  sink, chosen at first emit: `VREPLAY_SOCK=<path>` (Unix stream
+  socket, falls through to the file sink if the connect fails),
+  `VREPLAY_FILE=<path>`, else `./vreplay.dump`. Never stdout.
+  Instrumented bytecode must run under the fork's own `ocamlrun`.
+- `testing/` — golden-dump cases and `run_tests.sh`: compiles and runs
+  each case, validates every dump line parses and depth balances, and
+  diffs against `expected/` up to a consistent address bijection
+  (`--promote` regenerates). The interface vendors these goldens
+  verbatim as its fixtures.
 
 Build facts (cool_name automates all of this): bytecode only — `make
-world`, never `world.opt`; native has never built on this branch. The
-team layout configures with `--prefix=$PWD/_install`, and bytecode-only
-`make install` is expected to abort at `tools/ocamldep.opt` — after
-everything that matters is already installed. When editing the fork,
-beware the stale-relink hazard its `.claude/commands/build.md`
-documents: verify `./ocamlc` is newer than your changed `.cmo`s.
-Upstream's contribution rules apply inside it, including `AI.md`
-(disclose AI-generated portions).
+world`, never `world.opt`; native has never built on these branches.
+The team layout configures with `--prefix=$PWD/_install`, and
+bytecode-only `make install` is expected to abort at
+`tools/ocamldep.opt` — after everything that matters is already
+installed. When editing the fork, beware the stale-relink hazard its
+`.claude/commands/build.md` documents: verify `./ocamlc` is newer than
+your changed `.cmo`s. Upstream's contribution rules apply inside it,
+including `AI.md` (disclose AI-generated portions).
 
 ### jsip-debugger-interface
 
 The frontend, at <https://github.com/wuad391/jsip-debugger-interface>,
-pinned to the `parsing` branch: `lib/types` (`Call.Info`,
-`Call_stack`) and `lib/parsing` (`Dump_reader.read_until_empty`, scanf
-formats for the wire records) feed `app/bin/main.ml` — whose
-command-line wiring is still commented out, so running it is currently
-a no-op. `app/bin/dummy.txt` is the reference dump fixture. The tip
-only compiles under `--profile release` (dev turns its WIP warnings
-into errors), which is how cool_name builds it. It has its own
-`CLAUDE.md` (same conventions as this file) and repo-scoped skills
-(`bonsai-web`, `frontend-design`, `ocaml-ppx`, `code-review`); follow
-those for any work under `jsip-debugger-interface/`.
+pinned to `worktree-debugger-tui`: the GDB-style terminal interface
+built on bonsai_term — its README has the pane-by-pane tour and key
+bindings. Layout: `lib/types` (calls, locations, snapshots, the call
+stack), `lib/parsing` (dump reader and source loader), `lib/replay`
+(the per-step replay model), `lib/tui` (panes, theme, app), and
+`app/bin/main.exe`, run as
+`main.exe -dump-file FILE [-source-root DIR]`. `testing/` vendors the
+compiler's golden dumps verbatim, and the expect tests run on them.
+Builds and tests clean on the OxCaml switch with plain `dune build` /
+`dune runtest`. It has its own `CLAUDE.md` (same conventions as this
+file) and repo-scoped skills (`bonsai-web`, `frontend-design`,
+`ocaml-ppx`, `code-review`); follow those for any work under
+`jsip-debugger-interface/`.
 
 ### The dune workspace and the submodules
 
 The root `dune` file marks both submodules `data_only_dirs`: each is
-its own project (the compiler tree is not dune-buildable from here,
-and the interface tip needs its own profile), so root `dune build` /
+its own project with its own toolchain story, so root `dune build` /
 `runtest` / `fmt` cover only this repo's code, and CI checks out
 neither submodule. To run dune on the nested interface checkout, force
-its root and profile:
-`cd jsip-debugger-interface && dune build --root . --profile release`
-(plain `dune build` walks up to this repo's workspace, which ignores
-it).
+its root: `cd jsip-debugger-interface && dune build --root .` (plain
+`dune build` walks up to this repo's workspace, which ignores it).
 
 ## The cool_name pipeline
 
 `./cool_name.sh path/to/program.ml` runs the whole pipeline on one
 stdlib-only, single-file program; try
-`./cool_name.sh examples/greet.ml`. Stages, with artifacts under
+`./cool_name.sh examples/map_demo.ml`. Stages, with artifacts under
 `_vreplay/<program-name>/` (gitignored):
 
-1. First use only: builds the forked compiler (configure to
-   `_install`, bytecode `make world`, the tolerated partial install,
-   hand-finished `ocamlc`/`ocamldep` symlinks). Takes ~10 min; log at
+1. Builds the forked compiler whenever the pinned submodule commit
+   changes (stamped in `_install/.built-rev`): configure to
+   `_install`, bytecode `make world`, one of the fork's golden-dump
+   cases as validation, the tolerated partial install, hand-finished
+   `ocamlc`/`ocamldep` symlinks. ~10 min from scratch; log at
    `_vreplay/compiler-build.log`.
-2. Generates a scratch dune project (`(modes byte)`,
-   `-visual-replay`) and builds it with the fork as the toolchain:
-   shim scripts put the fork's `ocamlc`/`ocamldep` on PATH, each run
-   through the fork's `ocamlrun`, and `-I <compiler>/vreplay` resolves
-   `vreplay.cma` from where the fork's Makefile builds it.
-3. Runs the bytecode under the fork's `ocamlrun`, capturing stdout as
-   `dump.txt` — replay events interleaved with the program's own
-   prints, for now.
-4. Builds the interface (`--profile release`) and invokes
-   `app/bin/main.exe <dump>`. Today that parses nothing (the
-   interface's CLI is commented out); the handoff is wired for when it
-   lands.
+2. Generates a scratch dune project (`(modes byte)`, `-visual-replay`;
+   the module keeps the program's name when it is a valid module name)
+   and builds it with the fork as the toolchain: shim scripts put the
+   fork's `ocamlc`/`ocamldep` on PATH, each run through the fork's
+   `ocamlrun`, and `-I <compiler>/vreplay` resolves `vreplay.cma` from
+   where the fork's Makefile builds it.
+3. Runs the bytecode under the fork's `ocamlrun` with
+   `VREPLAY_FILE=<name>.dump`: events go to the dump, the program's
+   own output stays on the terminal. A run that fires no events
+   (nothing tracked) is an error, not an empty replay.
+4. Builds the interface and execs the TUI on the dump, with
+   `-source-root` pointed at the scratch project so the source pane
+   resolves. `q` quits, back to your shell.
 
 ## Build, test, format
 
@@ -282,7 +292,7 @@ jsip-debugger-compiler/    submodule: OCaml compiler fork, pinned to
 jsip-debugger-interface/   submodule: frontend, pinned to parsing (has
                            its own CLAUDE.md and skills)
 cool_name.sh               the pipeline driver (see above)
-examples/greet.ml          sample input for it
+examples/map_demo.ml       sample input for it
 _vreplay/                  its gitignored working area
 dune                       excludes the submodules from the workspace
 lib/

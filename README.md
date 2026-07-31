@@ -2,11 +2,12 @@
 
 The outer shell of the JSIP visual replay debugger. One command runs the
 whole pipeline — compile a program with the forked, instrumenting
-compiler, capture its replay dump, and hand the dump to the interface:
+compiler, capture its replay dump, and step through the run in the
+debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
-./cool_name.sh examples/greet.ml
+./cool_name.sh examples/map_demo.ml
 ```
 
 The first run also builds the forked compiler (~10 min). See `CLAUDE.md`
