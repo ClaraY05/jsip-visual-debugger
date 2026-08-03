@@ -7,13 +7,21 @@ debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
-./cool_name.sh examples/map_demo.ml
+./cool_name.sh examples/map_demo.ml       # one map, built and trimmed
+./cool_name.sh examples/order_book.ml     # two containers over shared records
 ```
 
-The first run also builds the forked compiler (~10 min). Target
-programs are stdlib-only for now — no `open Core`/`Base`; `Map`, `Set`,
-`Queue`, and `Hashtbl` calls are the instrumented ones. See `CLAUDE.md`
-for how the pieces fit together and the plan to lift this.
+The first run also builds the forked compiler (~10 min); later runs
+reuse it until the pinned commit changes.
+
+What gets recorded: calls involving a stdlib
+`Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray`, and every binding of a
+value whose type the program declares itself — so a record of your own
+is a first-class thing on the heap pane, not just some container's
+contents. Target programs are stdlib-only for now: no `open
+Core`/`Base`. The compiler *understands* Core's containers; what is
+missing is a Core built for it. `CLAUDE.md` has how the pieces fit
+together and the two ways to lift that.
 
 ---
 

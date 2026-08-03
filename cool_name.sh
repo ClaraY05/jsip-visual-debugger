@@ -43,9 +43,11 @@ esac
 if grep -qE '^[[:space:]]*open!?[[:space:]]+(Core|Base|Async)\b' "$prog"; then
   die "this program opens Core/Base/Async, which the forked compiler \
 cannot link (it ships only the OCaml stdlib, and the opam switch's \
-libraries are built by an incompatible compiler). Use stdlib modules -- \
-Map/Set/Queue/Hashtbl are the tracked ones. See CLAUDE.md for the plan \
-to lift this."
+libraries are built by an incompatible compiler). The compiler knows \
+Core's containers -- what is missing is a Core built for IT. Use the \
+stdlib meanwhile: Map/Set/Queue/Hashtbl/Stack/Dynarray are tracked, \
+and so is every type this program declares itself. See CLAUDE.md for \
+the two ways to lift this."
 fi
 
 name="$(basename "${prog%.ml}")"
@@ -139,8 +141,11 @@ env -u CAML_LD_LIBRARY_PATH VREPLAY_FILE="$dump" \
   "$ocamlrun" "$build/_build/default/$module.bc" ||
   die "instrumented program exited nonzero"
 [ -s "$dump" ] ||
-  die "the run produced no replay events -- only calls involving stdlib \
-Map/Set/Queue/Hashtbl are instrumented"
+  die "the run produced no replay events. What is instrumented: calls \
+involving a stdlib Map/Set/Queue/Hashtbl/Stack/Dynarray, and each \
+binding of a value whose type this program declares. An event rooted \
+at a MUTATION needs a named identifier -- Hashtbl.add tbl ... is \
+recorded, Hashtbl.add t.field ... is not"
 say "dump captured: ${dump#"$root/"} ($(grep -c '(event ' "$dump") events)"
 
 # --- 4. hand the dump to the interface --------------------------------------

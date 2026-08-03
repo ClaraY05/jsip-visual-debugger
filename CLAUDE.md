@@ -12,10 +12,12 @@ dune, expect tests).
 
 The pipeline, all driven by `./cool_name.sh path/to/program.ml`: the
 **compiler** submodule (an `ocaml/ocaml` fork), behind a
-`-visual-replay` flag, instruments calls involving tracked data
-structures (stdlib `Map`/`Set`/`Queue`/`Hashtbl`) so the running
-program logs one event per call — its location, arguments, the live
-registry, and a walked snapshot of the structure's heap shape — as one
+`-visual-replay` flag, instruments calls involving a catalogued data
+structure — stdlib `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray`,
+Base and Core's containers, and values of types the program itself
+declared — so the running program logs one event per call: its
+location, arguments, the live registry, and a walked snapshot of the
+structure's heap shape, as one
 `(event ...)` sexp per line, with `{`/`}` markers tracking call depth.
 The log goes to its own sink (`VREPLAY_FILE=<path>`, or `VREPLAY_SOCK`
 for a live socket listener, default `./vreplay.dump`), never stdout,
@@ -48,7 +50,9 @@ What the fork adds:
 - `Clflags.visual_replay` (the `-visual-replay` flag) gates everything.
 - `typing/vreplay_instrumentation.ml{,i}` rewrites the typedtree,
   wrapping calls whose arguments or result involve a structure from
-  the catalogue (currently stdlib `Map`, `Set`, `Queue`, `Hashtbl`).
+  `vreplay/data_structure.ml`'s catalogue — that file is the authority
+  on what is tracked and on each one's heap layout, and the interface
+  mirrors its constructor names.
 - `vreplay/` — runtime library auto-linked under the flag
   (`bytecomp/bytelink.ml` inserts `vreplay.cma` after `stdlib.cma`;
   `driver/compmisc.ml` puts `+vreplay` on the load path). It assigns
@@ -104,9 +108,11 @@ its root: `cd jsip-debugger-interface && dune build --root .` (plain
 ## The cool_name pipeline
 
 `./cool_name.sh path/to/program.ml` runs the whole pipeline on one
-stdlib-only, single-file program; try
-`./cool_name.sh examples/map_demo.ml`. Stages, with artifacts under
-`_vreplay/<program-name>/` (gitignored):
+stdlib-only, single-file program. Two examples ship with it:
+`map_demo.ml` (one map, built and trimmed) and `order_book.ml` (a
+hashtable and a queue over the same records, so the heap pane draws
+each record once and points at it from the other container). Stages,
+with artifacts under `_vreplay/<program-name>/` (gitignored):
 
 1. Builds the forked compiler whenever the pinned submodule commit
    changes (stamped in `_install/.built-rev`): configure to
@@ -129,16 +135,28 @@ stdlib-only, single-file program; try
    resolves. `q` quits, back to your shell.
 
 Target programs are **stdlib-only** — no `open Core`/`Base` (cool_name
-rejects them up front). This is a toolchain-lineage limit, not a dune
-setting: the fork is upstream-trunk OCaml with only its own stdlib,
-while the opam switch's Core/Base (and every ppx) are built by the
-OxCaml `5.2.0+ox` compiler — incompatible interfaces and object
-format, so no `-I`/findlib incantation can link them. Lifting it means
-porting the vreplay patches onto the OxCaml compiler so the whole
-switch (Core, ppx, dune-with-findlib) just works; the interface's
-`worktree-core-ds-support` branch already stages the interface side
-(`Core_map`/`Core_set`/`Core_queue` in the snapshot catalogue, ready
-for the compiler's `Data_structure.t` to grow the same constructors).
+rejects them up front). Note what this is and is not: the compiler
+*understands* Core's containers (its catalogue names them and its own
+golden cases exercise them against representation-accurate stand-ins),
+and the interface draws them. What is missing is a Core the fork can
+**link**. That is toolchain lineage, not a dune setting: the fork is
+upstream-trunk OCaml with only its own stdlib, while the opam switch's
+Core/Base — and every ppx — are built by the OxCaml `5.2.0+ox`
+compiler, whose interfaces the fork rejects outright (`Caml1999I578`
+against `Caml1999I037`).
+
+Two ways out, in increasing order of effort:
+
+- Build Core *for the fork*, in a switch of its own, and drive dune
+  with a shim `ocamlc` that adds `-visual-replay`. This is proven —
+  it is how the JSIP exchange was instrumented — and its trap is the
+  runtime: dune links `-custom`, so the C walker comes from
+  `$OCAMLLIB/libcamlrun.a`, and a stale one links clean and then
+  segfaults on the first event. It needs a private `OCAMLLIB` whose
+  runtime and `vreplay/` come from the same tree as the compiler.
+- Port the vreplay patches onto OxCaml itself, so the whole existing
+  switch (Core, ppx, dune-with-findlib) just works. Nothing to shim,
+  but it is a fork of a fork to maintain.
 
 ## Build, test, format
 
@@ -299,12 +317,14 @@ dune discovers libraries automatically as long as they have a `dune` file.
 ## Project layout
 
 ```
-jsip-debugger-compiler/    submodule: OCaml compiler fork, pinned to
-                           c/vreplay-registry-dynarray
-jsip-debugger-interface/   submodule: frontend, pinned to parsing (has
-                           its own CLAUDE.md and skills)
+jsip-debugger-compiler/    submodule: OCaml compiler fork, tracking
+                           vreplay-main
+jsip-debugger-interface/   submodule: frontend, tracking
+                           worktree-debugger-tui (has its own CLAUDE.md
+                           and skills)
 cool_name.sh               the pipeline driver (see above)
-examples/map_demo.ml       sample input for it
+examples/                  sample inputs for it: map_demo.ml,
+                           order_book.ml
 _vreplay/                  its gitignored working area
 dune                       excludes the submodules from the workspace
 lib/

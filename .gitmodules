@@ -5,4 +5,4 @@
 [submodule "jsip-debugger-compiler"]
 	path = jsip-debugger-compiler
 	url = https://github.com/ClaraY05/jsip-debugger-compiler
-	branch = fix/walker-correctness
+	branch = vreplay-main
