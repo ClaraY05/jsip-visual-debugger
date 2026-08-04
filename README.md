@@ -7,6 +7,8 @@ debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
+./cool_name.sh examples/greet.ml          # single-file program
+./cool_name.sh examples/calculator        # multi-file program (needs a main.ml)
 ./cool_name.sh examples/map_demo.ml                # one map, built and trimmed
 ./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
@@ -44,6 +46,35 @@ through record fields either way.
 
 `CLAUDE.md` has how the pieces fit together, including why linking Core
 needs a switch built by the fork's own compiler and how that is wired up.
+
+## Compute heat profiles
+
+Alongside the replay dump, the pipeline perf-samples the **unchanged**
+program — natively compiled with the `5.2.0+ox` opam switch's `ocamlopt`
+and looped in-process so even a microsecond-scale program accumulates
+enough samples — and distills the report into a per-function compute
+profile, `_vreplay/<name>/heat.sexp`:
+
+```
+((version 1) (root_module Greet)
+ (entries
+  (((module_path (Greet)) (kind (Named shout)) (samples 8841))
+   ((module_path (Greet)) (kind (Named generate_string)) (samples 3819)))))
+```
+
+That sexp is the data contract with the interface (mirrored by its
+`Jsip_types.Heat_profile`), which colors each call-stack row by its
+function's share of sampled compute. `perf_heat/` (a top-level peer of the two
+submodules, since it too produces the interface's input data) holds the symbol
+demangler, perf-report parser, and profile writer; `bin/perf_heat_interface.exe` is the CLI face of perf — the report → sexp step `cool_name.sh` pipes through. The stage is
+optional: no `perf` or no native switch just means a heat-less replay.
+
+Caveats worth knowing: flambda2 may inline small functions away (they
+show as "no data", not "cheap"), a `C_CALL`'s work is attributed to the
+runtime rather than the calling function, and shares are measured on the
+looped build. `COMPILER_DIR`/`INTERFACE_DIR` env vars point the pipeline
+at checkouts other than the pinned submodules; `JSIP_HEAT_SWITCH`
+overrides the opam switch used for the native build.
 
 ---
 

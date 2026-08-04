@@ -107,6 +107,45 @@ its root: `cd jsip-debugger-interface && dune build --root .` (plain
 
 ## The cool_name pipeline
 
+`./cool_name.sh path/to/program.ml` runs the whole pipeline on a
+stdlib-only program; try `./cool_name.sh examples/greet.ml`. A
+directory argument is a multi-file program — its entry point must be
+`main.ml`, the rest are ordinary dependency modules (try
+`./cool_name.sh examples/calculator`: lexer → parser → evaluator with a
+`Map` environment). Stages, with artifacts under
+`_vreplay/<program-name>/` (gitignored):
+
+1. First use only: builds the forked compiler (configure to
+   `_install`, bytecode `make world`, the tolerated partial install,
+   hand-finished `ocamlc`/`ocamldep` symlinks). Takes ~10 min; log at
+   `_vreplay/compiler-build.log`.
+2. Generates a scratch dune project (`(modes byte)`,
+   `-visual-replay`) and builds it with the fork as the toolchain:
+   shim scripts put the fork's `ocamlc`/`ocamldep` on PATH, each run
+   through the fork's `ocamlrun`, and `-I <compiler>/vreplay` resolves
+   `vreplay.cma` from where the fork's Makefile builds it.
+3. Runs the bytecode under the fork's `ocamlrun` with
+   `VREPLAY_FILE=dump.txt` (newer fork branches write the events to
+   that sink; if the runtime ignored it, the captured stdout — the old
+   behavior — becomes the dump instead).
+3b. Perf heat capture (optional; skipped with a warning when `perf` or
+   the `5.2.0+ox` switch is missing): wraps the *unchanged* program
+   text in an in-process loop, compiles it natively
+   (`opam exec --switch 5.2.0+ox -- ocamlopt -g`), calibrates to ~3 s
+   of wall time, records with `perf record -F max`, and pipes
+   `perf report -F sample,sym` through `bin/perf_heat_interface.exe`
+   (`perf_heat/`: demangler, report parser, aggregator) into
+   `heat.sexp` — the per-function compute profile the interface's
+   `-perf-file` flag consumes. `JSIP_HEAT_SWITCH` overrides the
+   switch; exit 3 from `perf_heat_interface.exe` (too few samples) triggers one
+   ×10-iterations retry.
+4. Builds the interface (`--profile release`) and invokes
+   `app/bin/main.exe -dump-file <dump> -source-root <build>` plus
+   `-perf-file <heat.sexp>` when stage 3b produced one.
+   `COMPILER_DIR`/`INTERFACE_DIR` env vars point stages at checkouts
+   other than the pinned submodules (the pinned interface predates
+   these flags but ignores argv entirely, so the handoff is harmless
+   there).
 `./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline,
 or `path/to/target.exe` to name a dune target instead of a source file.
 Two examples ship with it: `map_demo.ml` (one map, built and trimmed)

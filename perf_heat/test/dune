@@ -1,0 +1,11 @@
+(library
+ (name sandbox_perf_heat_test)
+ (libraries sandbox_perf_heat expect_test_helpers_core core)
+ ; this switch's ppx_expect resolves dune's -source-tree-root against the
+ ; test file's basename, so corrections crash; override it back to the
+ ; test directory (last flag wins)
+ (inline_tests
+  (flags
+   (:standard -source-tree-root .)))
+ (preprocess
+  (pps ppx_jane)))
