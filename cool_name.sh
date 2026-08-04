@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The outer shell of the visual replay debugger.
 #
-#   ./cool_name.sh path/to/program.ml
+#   ./cool_name.sh path/to/program.ml        # single file
+#   ./cool_name.sh path/to/program-dir/      # multi-file: needs a main.ml
 #
 # Pipeline:
 #   1. build the forked compiler if it isn't built yet (bytecode world)
@@ -28,17 +29,27 @@ die() {
   exit 1
 }
 
-[ $# -eq 1 ] || die "usage: ./cool_name.sh path/to/program.ml"
-prog="$1"
-[ -f "$prog" ] || die "no such file: $prog"
-case "$prog" in
-*.ml) ;;
-*) die "expected an .ml file, got: $prog" ;;
-esac
+[ $# -eq 1 ] || die "usage: ./cool_name.sh path/to/program.ml | path/to/dir"
+prog="${1%/}"
+# A directory is a multi-file program; its entry point must be main.ml
+# (the other modules are ordinary dependencies dune sorts out).
+if [ -d "$prog" ]; then
+  [ -f "$prog/main.ml" ] ||
+    die "a multi-file program needs a main.ml: $prog"
+  name="$(basename "$prog")"
+  main_src="$prog/main.ml"
+else
+  [ -f "$prog" ] || die "no such file: $prog"
+  case "$prog" in
+  *.ml) ;;
+  *) die "expected an .ml file or a directory, got: $prog" ;;
+  esac
+  name="$(basename "${prog%.ml}")"
+  main_src="$prog"
+fi
 [ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
   die "submodules missing; run: git submodule update --init --recursive"
 
-name="$(basename "${prog%.ml}")"
 work="$root/_vreplay/$name"
 dump="$work/dump.txt"
 mkdir -p "$work"
@@ -93,7 +104,12 @@ EOF
   chmod +x "$shims/$tool"
 done
 
-cp "$prog" "$build/main.ml"
+if [ -d "$prog" ]; then
+  cp "$prog"/*.ml "$build/"
+  cp "$prog"/*.mli "$build/" 2>/dev/null || true
+else
+  cp "$prog" "$build/main.ml"
+fi
 cat >"$build/dune-project" <<'EOF'
 (lang dune 3.0)
 EOF
@@ -131,7 +147,12 @@ say "dump captured: ${dump#"$root/"} ($(wc -l <"$dump") lines)"
 heat="$work/heat.sexp"
 rm -f "$heat"
 heat_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
-module_name="${name^}"
+# The wrapped entry module: for a single file it keeps the program's own
+# basename (so symbol module paths match the real program); a multi-file
+# program's entry is its main.ml. Only the entry is looped — dependency
+# modules are definitions and evaluate once.
+if [ -d "$prog" ]; then wrap_name="main"; else wrap_name="$name"; fi
+module_name="${wrap_name^}"
 
 if ! command -v perf >/dev/null 2>&1; then
   say "perf not found; skipping heat capture"
@@ -142,28 +163,45 @@ else
   say "capturing perf heat profile (native build, looped in-process)"
   perfdir="$work/perf"
   rm -rf "$perfdir"
-  mkdir -p "$perfdir"
-  wrapped="$perfdir/$name.ml"
+  mkdir -p "$perfdir/build"
+  if [ -d "$prog" ]; then
+    for src in "$prog"/*.ml; do
+      [ "$(basename "$src")" = "main.ml" ] || cp "$src" "$perfdir/build/"
+    done
+    cp "$prog"/*.mli "$perfdir/build/" 2>/dev/null || true
+  fi
+  wrapped="$perfdir/build/$wrap_name.ml"
   {
     printf 'let () =\n'
     printf '  let n = int_of_string (Sys.getenv "JSIP_HEAT_ITERS") in\n'
     printf '  for _ = 1 to n do\n'
     printf '    let module _ = struct\n'
-    printf '# 1 "%s.ml"\n' "$name"
-    cat "$prog"
+    printf '# 1 "%s.ml"\n' "$wrap_name"
+    cat "$main_src"
     printf '    end in ()\n'
     printf '  done\n'
   } >"$wrapped"
-  if ! (cd "$perfdir" &&
-    opam exec --switch "$heat_switch" -- ocamlopt -g "$name.ml" \
-      -o prog.exe) >"$perfdir/build.log" 2>&1; then
+  # a scratch dune project, so multi-file programs get their modules
+  # compiled in dependency order without us sorting them
+  cat >"$perfdir/build/dune-project" <<'EOF'
+(lang dune 3.0)
+EOF
+  cat >"$perfdir/build/dune" <<EOF
+(executable
+ (name $wrap_name)
+ (modes native))
+EOF
+  if ! opam exec --switch "$heat_switch" -- dune build \
+    --root "$perfdir/build" --no-config "./$wrap_name.exe" \
+    >"$perfdir/build.log" 2>&1; then
     say "native build for perf failed (see ${perfdir#"$root/"}/build.log); skipping heat capture"
   else
+    exe="$perfdir/build/_build/default/$wrap_name.exe"
     # aim for ~3s of looped wall time so `perf record -F max` collects
     # a few hundred thousand samples whatever the program's size
     calib_iters=10000
     start_ms=$(date +%s%3N)
-    JSIP_HEAT_ITERS=$calib_iters "$perfdir/prog.exe" >/dev/null 2>&1 || true
+    JSIP_HEAT_ITERS=$calib_iters "$exe" >/dev/null 2>&1 || true
     elapsed_ms=$(($(date +%s%3N) - start_ms))
     [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
     iters=$((calib_iters * 3000 / elapsed_ms))
@@ -173,13 +211,13 @@ else
       die "perf_heat_interface build failed"
     for attempt in 1 2; do
       if ! perf record -F max -o "$perfdir/perf.data" -- \
-        env JSIP_HEAT_ITERS="$iters" "$perfdir/prog.exe" \
+        env JSIP_HEAT_ITERS="$iters" "$exe" \
         >/dev/null 2>"$perfdir/perf.log"; then
         say "perf record failed (see ${perfdir#"$root/"}/perf.log); skipping heat capture"
         break
       fi
       status=0
-      perf report -i "$perfdir/perf.data" --stdio --dsos prog.exe \
+      perf report -i "$perfdir/perf.data" --stdio --dsos "$wrap_name.exe" \
         --percent-limit 0 -F sample,sym 2>/dev/null |
         "$root/_build/default/bin/perf_heat_interface.exe" "$module_name" "$heat" ||
         status=$?

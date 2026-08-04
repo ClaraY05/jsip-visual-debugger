@@ -140,8 +140,15 @@ let split_qualified s =
 
 let is_module_name s = (not (String.is_empty s)) && Char.is_uppercase s.[0]
 
+(* a dune-built executable's modules are namespaced [Dune__exe__Lexer]; that
+   prefix is dune's plumbing, not part of the program's module path *)
+let strip_dune_exe module_path =
+  match module_path with "Dune" :: "exe" :: rest -> rest | _ -> module_path
+;;
+
 let make ~module_path ~base =
   let open Option.Let_syntax in
+  let module_path = strip_dune_exe module_path in
   let%bind base = chop_code_suffix base in
   match
     (not (List.is_empty module_path))

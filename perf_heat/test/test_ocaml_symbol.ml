@@ -82,3 +82,20 @@ let%expect_test "runtime C, glue, plumbing, data and foreign symbols reject" =
     ()
     |}]
 ;;
+
+let%expect_test "dune's Dune__exe__ executable namespace strips away" =
+  show "Dune.exe.Lexer.go_5_11_code";
+  [%expect {| (((module_path (Lexer)) (kind (Named go)))) |}];
+  show "camlDune__exe__Evaluator__eval_1_41_code";
+  [%expect {| (((module_path (Evaluator)) (kind (Named eval)))) |}];
+  show "Dune.exe.Main.fn[main.ml:14,6--231]_0_1_code";
+  [%expect
+    {|
+    (((module_path (Main))
+      (kind
+       (Anonymous (file_path main.ml) (line_number 14) (char_range (6 231))))))
+    |}];
+  (* the namespaced entry module is still plumbing *)
+  show "Dune.exe.Main.entry";
+  [%expect {| () |}]
+;;

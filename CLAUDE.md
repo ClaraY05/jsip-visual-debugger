@@ -96,9 +96,12 @@ it).
 
 ## The cool_name pipeline
 
-`./cool_name.sh path/to/program.ml` runs the whole pipeline on one
-stdlib-only, single-file program; try
-`./cool_name.sh examples/greet.ml`. Stages, with artifacts under
+`./cool_name.sh path/to/program.ml` runs the whole pipeline on a
+stdlib-only program; try `./cool_name.sh examples/greet.ml`. A
+directory argument is a multi-file program — its entry point must be
+`main.ml`, the rest are ordinary dependency modules (try
+`./cool_name.sh examples/calculator`: lexer → parser → evaluator with a
+`Map` environment). Stages, with artifacts under
 `_vreplay/<program-name>/` (gitignored):
 
 1. First use only: builds the forked compiler (configure to
