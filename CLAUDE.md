@@ -107,49 +107,17 @@ its root: `cd jsip-debugger-interface && dune build --root .` (plain
 
 ## The cool_name pipeline
 
-`./cool_name.sh path/to/program.ml` runs the whole pipeline on a
-stdlib-only program; try `./cool_name.sh examples/greet.ml`. A
-directory argument is a multi-file program — its entry point must be
-`main.ml`, the rest are ordinary dependency modules (try
-`./cool_name.sh examples/calculator`: lexer → parser → evaluator with a
-`Map` environment). Stages, with artifacts under
-`_vreplay/<program-name>/` (gitignored):
+`./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline.
+The argument can also be a **directory** (a multi-file program entering
+at `main.ml`, the rest ordinary dependency modules) or a **`.exe`**
+naming a dune target instead of a source file.
+`COMPILER_DIR`/`INTERFACE_DIR` override the submodule checkouts, for
+running against clones ahead of the pins.
 
-1. First use only: builds the forked compiler (configure to
-   `_install`, bytecode `make world`, the tolerated partial install,
-   hand-finished `ocamlc`/`ocamldep` symlinks). Takes ~10 min; log at
-   `_vreplay/compiler-build.log`.
-2. Generates a scratch dune project (`(modes byte)`,
-   `-visual-replay`) and builds it with the fork as the toolchain:
-   shim scripts put the fork's `ocamlc`/`ocamldep` on PATH, each run
-   through the fork's `ocamlrun`, and `-I <compiler>/vreplay` resolves
-   `vreplay.cma` from where the fork's Makefile builds it.
-3. Runs the bytecode under the fork's `ocamlrun` with
-   `VREPLAY_FILE=dump.txt` (newer fork branches write the events to
-   that sink; if the runtime ignored it, the captured stdout — the old
-   behavior — becomes the dump instead).
-3b. Perf heat capture (optional; skipped with a warning when `perf` or
-   the `5.2.0+ox` switch is missing): wraps the *unchanged* program
-   text in an in-process loop, compiles it natively
-   (`opam exec --switch 5.2.0+ox -- ocamlopt -g`), calibrates to ~3 s
-   of wall time, records with `perf record -F max`, and pipes
-   `perf report -F sample,sym` through `bin/perf_heat_interface.exe`
-   (`perf_heat/`: demangler, report parser, aggregator) into
-   `heat.sexp` — the per-function compute profile the interface's
-   `-perf-file` flag consumes. `JSIP_HEAT_SWITCH` overrides the
-   switch; exit 3 from `perf_heat_interface.exe` (too few samples) triggers one
-   ×10-iterations retry.
-4. Builds the interface (`--profile release`) and invokes
-   `app/bin/main.exe -dump-file <dump> -source-root <build>` plus
-   `-perf-file <heat.sexp>` when stage 3b produced one.
-   `COMPILER_DIR`/`INTERFACE_DIR` env vars point stages at checkouts
-   other than the pinned submodules (the pinned interface predates
-   these flags but ignores argv entirely, so the handoff is harmless
-   there).
-`./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline,
-or `path/to/target.exe` to name a dune target instead of a source file.
-Two examples ship with it: `map_demo.ml` (one map, built and trimmed)
-and `order_book/` (a Core limit order book with price-time priority — a
+The examples: `map_demo.ml` (one map, built and trimmed), `map_fold.ml`,
+`calculator/` (multi-file — lexer → parser → evaluator over a `Map`
+environment) and `order_book/` (a Core limit order book with price-time
+priority — a
 `Map` of price levels over `Hash_queue`s, a `Hashtbl` id index, two
 `Hash_set`s and an `Fdeque` tape, all holding the same order records, so
 the heap pane draws each order once and points at it from every
@@ -161,8 +129,9 @@ both gitignored.
    changes (stamped in `_install/.built-rev`): configure to
    `_install`, bytecode `make world`, one of the fork's golden-dump
    cases as validation, the tolerated partial install, hand-finished
-   `ocamlc`/`ocamldep` symlinks. ~10 min from scratch; log at
-   `_vreplay/compiler-build.log`.
+   `ocamlc`/`ocamldep` symlinks. 3½–4¼ min from scratch on 4 cores (two
+   measured builds: 3 min 35 s and 4 min 16 s, 464 `.cmo`s each with
+   nothing reused); log at `_vreplay/compiler-build.log`.
 2. Assembles a toolchain — see below — pairing the fork's compiler with
    an opam switch's libraries.
 3. Compiles with `-visual-replay`, in one of two modes:
@@ -172,10 +141,11 @@ both gitignored.
      instrumented `_build` is never left in the checkout, and the
      executable target is read out of the `dune` stanza (override with
      `VREPLAY_TARGET`).
-   - **standalone**, for a loose `.ml`: a scratch dune project with
-     `(modes byte)`, `-visual-replay`, and `(libraries ...)` plus
-     `ppx_jane` inferred from the file's `open`s. The module keeps the
-     program's name when that is a valid module name.
+   - **standalone**, for a loose `.ml` or a directory: a scratch dune
+     project with `(modes byte)`, `-visual-replay`, and `(libraries ...)`
+     plus `ppx_jane` inferred from the `open`s. A single file's module
+     keeps the program's name when that is a valid module name; a
+     directory's modules are copied in as they are and enter at `main`.
    The build directory survives between runs so dune stays incremental;
    a change of compiler or switch invalidates it.
 4. Runs the resulting `-custom` executable with
@@ -183,9 +153,22 @@ both gitignored.
    own output stays on the terminal. A run that fires no events
    (nothing tracked) is an error, not an empty replay. `VREPLAY_DUMP_ONLY`
    stops here.
+4b. Perf heat capture, and **optional throughout** — every failure below
+   reports and carries on, because the debugger works without it. Skipped
+   in project mode: rebuilding somebody else's dune project natively, out
+   from under itself, is not this script's business. Otherwise it wraps
+   the *unchanged* program text in an in-process loop, builds it natively
+   on `JSIP_HEAT_SWITCH` (default `5.2.0+ox`), calibrates to ~3 s of wall
+   time, records with `perf record -F max`, and pipes
+   `perf report -F sample,sym` through `bin/perf_heat_interface.exe`
+   (`perf_heat/`: demangler, report parser, aggregator) into `heat.sexp`.
+   Exit 3 (too few samples) triggers one ×10-iterations retry.
 5. Builds the interface and execs the TUI on the dump, with
    `-source-root` at the project root (project mode) or the scratch
-   build context (standalone). `q` quits, back to your shell.
+   build context (standalone), plus `-perf-file` **only when the
+   interface advertises that flag** — it arrives with the heat work, and
+   passing it to an interface that predates it is an unknown-option
+   error rather than a nicety. `q` quits, back to your shell.
 
 ### The toolchain, and why it takes assembling
 
@@ -388,7 +371,11 @@ jsip-debugger-interface/   submodule: frontend, tracking
                            and skills)
 cool_name.sh               the pipeline driver (see above)
 examples/                  sample inputs for it: map_demo.ml,
+                           map_fold.ml, calculator/ (multi-file),
                            order_book/ (Core)
+perf_heat/                 the heat profile's demangler, perf-report
+                           parser and aggregator
+bin/                       perf_heat_interface.exe, the CLI over it
 _vreplay/                  its gitignored working area, including the
                            assembled .toolchain/
 dune                       excludes the submodules from the workspace

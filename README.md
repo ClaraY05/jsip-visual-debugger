@@ -7,20 +7,21 @@ debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
-./cool_name.sh examples/greet.ml          # single-file program
-./cool_name.sh examples/calculator        # multi-file program (needs a main.ml)
 ./cool_name.sh examples/map_demo.ml                # one map, built and trimmed
+./cool_name.sh examples/calculator                 # multi-file: lexer → parser → eval
 ./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
 
-The first run also builds the forked compiler (~10 min) and assembles a
+The first run also builds the forked compiler (~4 min) and assembles a
 toolchain from it; later runs reuse both until the pinned commit changes.
 
-Give it a loose `.ml` file and it is wrapped in a scratch dune project.
-Give it something that is **already a dune target** — either the `.exe`,
-as the order book above does, or an `.ml` with a `dune` beside it — and
-the project it belongs to is built where it stands, keeping its own
-libraries, ppx and dependencies. That is how a whole program comes in:
+Give it a loose `.ml` file and it is wrapped in a scratch dune project; a
+**directory** is the same but multi-file, entering at `main.ml` with the
+rest as ordinary dependency modules. Give it something that is **already
+a dune target** — either the `.exe`, as the order book above does, or an
+`.ml` with a `dune` beside it — and the project it belongs to is built
+where it stands, keeping its own libraries, ppx and dependencies. That is
+how a whole program comes in:
 
 ```sh
 ./cool_name.sh ~/jsip-exchange/app/debug_scenario/bin/main.exe
@@ -28,6 +29,14 @@ libraries, ppx and dependencies. That is how a whole program comes in:
 
 Artifacts go to a private `--build-dir`, so an instrumented `_build` is
 never left behind in the project's checkout.
+
+For programs whose sources are ours — a loose file or a directory, not
+someone else's dune project — it also captures a **perf heat profile**:
+the unchanged program text, compiled natively and looped in-process,
+sampled with `perf`, distilled into `heat.sexp` for the interface to
+colour its call stack with. Optional throughout; it says so and carries
+on when `perf`, the native switch or the interface's `-perf-file` flag
+is missing.
 
 What gets recorded: calls involving a container the compiler knows —
 the stdlib's `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and
@@ -46,35 +55,6 @@ through record fields either way.
 
 `CLAUDE.md` has how the pieces fit together, including why linking Core
 needs a switch built by the fork's own compiler and how that is wired up.
-
-## Compute heat profiles
-
-Alongside the replay dump, the pipeline perf-samples the **unchanged**
-program — natively compiled with the `5.2.0+ox` opam switch's `ocamlopt`
-and looped in-process so even a microsecond-scale program accumulates
-enough samples — and distills the report into a per-function compute
-profile, `_vreplay/<name>/heat.sexp`:
-
-```
-((version 1) (root_module Greet)
- (entries
-  (((module_path (Greet)) (kind (Named shout)) (samples 8841))
-   ((module_path (Greet)) (kind (Named generate_string)) (samples 3819)))))
-```
-
-That sexp is the data contract with the interface (mirrored by its
-`Jsip_types.Heat_profile`), which colors each call-stack row by its
-function's share of sampled compute. `perf_heat/` (a top-level peer of the two
-submodules, since it too produces the interface's input data) holds the symbol
-demangler, perf-report parser, and profile writer; `bin/perf_heat_interface.exe` is the CLI face of perf — the report → sexp step `cool_name.sh` pipes through. The stage is
-optional: no `perf` or no native switch just means a heat-less replay.
-
-Caveats worth knowing: flambda2 may inline small functions away (they
-show as "no data", not "cheap"), a `C_CALL`'s work is attributed to the
-runtime rather than the calling function, and shares are measured on the
-looped build. `COMPILER_DIR`/`INTERFACE_DIR` env vars point the pipeline
-at checkouts other than the pinned submodules; `JSIP_HEAT_SWITCH`
-overrides the opam switch used for the native build.
 
 ---
 

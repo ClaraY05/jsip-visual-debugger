@@ -1,22 +1,6 @@
 #!/usr/bin/env bash
 # The outer shell of the visual replay debugger.
 #
-#   ./cool_name.sh path/to/program.ml        # single file
-#   ./cool_name.sh path/to/program-dir/      # multi-file: needs a main.ml
-#
-# Pipeline:
-#   1. build the forked compiler if it isn't built yet (bytecode world)
-#   2. compile the program with -visual-replay, via a generated dune
-#      project that uses the fork as its toolchain
-#   3. run the instrumented bytecode and capture the replay dump
-#   3b. perf-sample the *unchanged* program, natively compiled, and
-#       distill a per-function compute profile (heat.sexp)
-#   4. build the interface and hand it the dump (and the heat profile)
-#
-# Artifacts land in _vreplay/<program-name>/ (gitignored).
-#
-# COMPILER_DIR / INTERFACE_DIR override the submodule checkouts, e.g. to
-# run against standalone clones that are ahead of the pinned commits.
 #   ./cool_name.sh path/to/program.ml [args...]
 #
 # Pipeline:
@@ -46,6 +30,8 @@
 # VREPLAY_DUMP_ONLY stops after step 4 with the dump on disk.
 set -euo pipefail
 
+# COMPILER_DIR / INTERFACE_DIR override the submodule checkouts, e.g. to
+# run against standalone clones that are ahead of the pinned commits.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 compiler="${COMPILER_DIR:-$root/jsip-debugger-compiler}"
 interface="${INTERFACE_DIR:-$root/jsip-debugger-interface}"
@@ -56,46 +42,38 @@ die() {
   exit 1
 }
 
-[ $# -eq 1 ] || die "usage: ./cool_name.sh path/to/program.ml | path/to/dir"
+[ $# -ge 1 ] ||
+  die "usage: ./cool_name.sh path/to/program.ml [args...]
+             ./cool_name.sh path/to/program-dir [args...]
+             ./cool_name.sh path/to/target.exe [args...]"
 prog="${1%/}"
-# A directory is a multi-file program; its entry point must be main.ml
-# (the other modules are ordinary dependencies dune sorts out).
+shift
+prog_args=("$@")
+# Three shapes. A loose .ml is wrapped in a scratch project; a directory
+# is the same but multi-file, its entry point main.ml and the rest
+# ordinary dependency modules dune sorts out; a .exe names a dune target
+# outright, which is what a project that already has a `dune` wants.
 if [ -d "$prog" ]; then
   [ -f "$prog/main.ml" ] ||
     die "a multi-file program needs a main.ml: $prog"
-  name="$(basename "$prog")"
+  prog="$(cd "$prog" && pwd)"
   main_src="$prog/main.ml"
 else
-  [ -f "$prog" ] || die "no such file: $prog"
   case "$prog" in
-  *.ml) ;;
-  *) die "expected an .ml file or a directory, got: $prog" ;;
+  *.ml)
+    [ -f "$prog" ] || die "no such file: $prog"
+    ;;
+  *.exe)
+    [ -d "$(dirname "$prog")" ] || die "no such directory: $(dirname "$prog")"
+    ;;
+  *)
+    die "expected an .ml file, a directory, or a dune .exe target, \
+got: $prog"
+    ;;
   esac
-  name="$(basename "${prog%.ml}")"
+  prog="$(cd "$(dirname "$prog")" && pwd)/$(basename "$prog")"
   main_src="$prog"
 fi
-[ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
-  die "submodules missing; run: git submodule update --init --recursive"
-
-[ $# -ge 1 ] ||
-  die "usage: ./cool_name.sh path/to/program.ml [args...]
-             ./cool_name.sh path/to/target.exe [args...]"
-prog="$1"
-shift
-prog_args=("$@")
-# Either an .ml file to instrument, or the dune target to build -- the
-# second is the one to reach for in a project that already has a `dune`
-# saying what its executable is called.
-case "$prog" in
-*.ml)
-  [ -f "$prog" ] || die "no such file: $prog"
-  ;;
-*.exe)
-  [ -d "$(dirname "$prog")" ] || die "no such directory: $(dirname "$prog")"
-  ;;
-*) die "expected an .ml file or a dune .exe target, got: $prog" ;;
-esac
-prog="$(cd "$(dirname "$prog")" && pwd)/$(basename "$prog")"
 [ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
   die "submodules missing; run: git submodule update --init --recursive"
 
@@ -257,13 +235,6 @@ fi
 
 tc_path="$shims:$tc/binsafe"
 
-if [ -d "$prog" ]; then
-  cp "$prog"/*.ml "$build/"
-  cp "$prog"/*.mli "$build/" 2>/dev/null || true
-else
-  cp "$prog" "$build/main.ml"
-fi
-cat >"$build/dune-project" <<'EOF'
 # The instrumented build runs under these; the interface build later must
 # not, so they are passed per-command rather than exported here.
 tc_env=(
@@ -357,15 +328,20 @@ declares: ${cands[*]:-none}. Set VREPLAY_TARGET to one of them."
   exe="$builddir/default/$reldir/$target.exe"
   source_root="$projroot"
 else
-  # Standalone mode. The scratch module keeps the program's own name when
-  # it is a valid module name (so the TUI's source pane shows e.g.
+  # Standalone mode. A directory keeps its own module names and enters at
+  # main.ml; a single file's scratch module keeps the program's own name
+  # when that is a valid module name (so the TUI's source pane shows e.g.
   # map_demo.ml), and falls back to "main" otherwise.
-  case "$name" in
-  [a-z_]*[!a-zA-Z0-9_]* | [!a-z_]*) module=main ;;
-  *) module="$name" ;;
-  esac
+  if [ -d "$prog" ]; then
+    module=main
+  else
+    case "$name" in
+    [a-z_]*[!a-zA-Z0-9_]* | [!a-z_]*) module=main ;;
+    *) module="$name" ;;
+    esac
+  fi
 
-  # Libraries the file opens. Anything Jane Street here is ppx_jane
+  # Libraries the program opens. Anything Jane Street here is ppx_jane
   # territory too: the deriving attributes are common enough in such
   # programs that leaving the driver out is the surprising choice.
   libs=""
@@ -374,12 +350,17 @@ else
     core_unix) mod=Core_unix ;;
     *) mod="$(printf '%s' "$lib" | sed 's/^./\U&/')" ;;
     esac
-    grep -qE "^[[:space:]]*open!?[[:space:]]+$mod\b" "$prog" &&
+    grep -rqE "^[[:space:]]*open!?[[:space:]]+$mod\b" "$prog" &&
       libs="$libs $lib"
   done
 
   say "compiling $prog with -visual-replay (scratch project${libs:+, linking$libs})"
-  cp "$prog" "$builddir/$module.ml"
+  if [ -d "$prog" ]; then
+    cp "$prog"/*.ml "$builddir/"
+    cp "$prog"/*.mli "$builddir/" 2>/dev/null || true
+  else
+    cp "$prog" "$builddir/$module.ml"
+  fi
   cat >"$builddir/dune-project" <<'EOF'
 (lang dune 3.0)
 EOF
@@ -424,23 +405,7 @@ if [ -n "${VREPLAY_DUMP_ONLY:-}" ]; then
   exit 0
 fi
 
-PATH="$shims:$PATH" dune build --root "$build" --no-config ./main.bc ||
-  die "instrumented build failed"
-
-# --- 3. run it, capture the dump --------------------------------------------
-# Newer fork branches write the replay events to the VREPLAY_FILE sink;
-# older ones print them to stdout. Ask for the sink, and if the runtime
-# ignored it, fall back to the captured stdout (the old behavior, replay
-# events interleaved with the program's own prints).
-say "running $name and capturing the replay dump"
-rm -f "$dump"
-env -u CAML_LD_LIBRARY_PATH VREPLAY_FILE="$dump" \
-  "$ocamlrun" "$build/_build/default/main.bc" >"$work/stdout.txt" ||
-  die "instrumented program exited nonzero; partial dump in $work"
-[ -s "$dump" ] || mv "$work/stdout.txt" "$dump"
-say "dump captured: ${dump#"$root/"} ($(wc -l <"$dump") lines)"
-
-# --- 3b. perf heat capture (optional) ---------------------------------------
+# --- 4b. perf heat capture (optional) ---------------------------------------
 # Samples the *unchanged* program -- its text is byte-identical; only the
 # generated harness around it loops it in-process, so a microsecond-scale
 # program accumulates enough samples -- natively compiled with the opam
@@ -448,17 +413,23 @@ say "dump captured: ${dump#"$root/"} ($(wc -l <"$dump") lines)"
 # profile (heat.sexp) the interface colors its call stack with. Skipped
 # with a warning when perf or the native switch is missing: heat is
 # optional, the debugger runs without it.
+#
+# Only for programs we own the sources of. A project built in place is
+# somebody else's dune project with its own libraries and ppx; rebuilding
+# it natively out from under itself is not this script's business.
 heat="$work/heat.sexp"
 rm -f "$heat"
 heat_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
-# The wrapped entry module: for a single file it keeps the program's own
-# basename (so symbol module paths match the real program); a multi-file
-# program's entry is its main.ml. Only the entry is looped — dependency
-# modules are definitions and evaluate once.
+# The wrapped entry module: a single file keeps its own basename (so
+# symbol module paths match the real program); a directory enters at
+# main.ml. Only the entry is looped -- dependency modules are definitions
+# and evaluate once.
 if [ -d "$prog" ]; then wrap_name="main"; else wrap_name="$name"; fi
 module_name="${wrap_name^}"
 
-if ! command -v perf >/dev/null 2>&1; then
+if [ -n "$projroot" ]; then
+  say "project mode; skipping heat capture (its sources are not ours to rebuild)"
+elif ! command -v perf >/dev/null 2>&1; then
   say "perf not found; skipping heat capture"
 elif ! opam exec --switch "$heat_switch" -- ocamlopt -version \
   >/dev/null 2>&1; then
@@ -500,22 +471,30 @@ EOF
     >"$perfdir/build.log" 2>&1; then
     say "native build for perf failed (see ${perfdir#"$root/"}/build.log); skipping heat capture"
   else
-    exe="$perfdir/build/_build/default/$wrap_name.exe"
+    heat_exe="$perfdir/build/_build/default/$wrap_name.exe"
     # aim for ~3s of looped wall time so `perf record -F max` collects
     # a few hundred thousand samples whatever the program's size
     calib_iters=10000
     start_ms=$(date +%s%3N)
-    JSIP_HEAT_ITERS=$calib_iters "$exe" >/dev/null 2>&1 || true
+    JSIP_HEAT_ITERS=$calib_iters "$heat_exe" >/dev/null 2>&1 || true
     elapsed_ms=$(($(date +%s%3N) - start_ms))
     [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
     iters=$((calib_iters * 3000 / elapsed_ms))
     [ "$iters" -lt 10000 ] && iters=10000
     [ "$iters" -gt 50000000 ] && iters=50000000
-    (cd "$root" && dune build bin/perf_heat_interface.exe) ||
-      die "perf_heat_interface build failed"
+    # --root . or dune walks up to whatever workspace encloses this
+    # checkout -- inside a git worktree that is the parent clone, where
+    # this target does not exist. And heat is optional by design, so a
+    # failure here reports and moves on rather than taking the run down.
+    if ! (cd "$root" && dune build --root . bin/perf_heat_interface.exe) \
+      >"$perfdir/interface-build.log" 2>&1; then
+      say "perf_heat_interface build failed (see ${perfdir#"$root/"}/interface-build.log); continuing without heat"
+      heat_ok=false
+    fi
     for attempt in 1 2; do
+      [ "${heat_ok:-true}" = false ] && break
       if ! perf record -F max -o "$perfdir/perf.data" -- \
-        env JSIP_HEAT_ITERS="$iters" "$exe" \
+        env JSIP_HEAT_ITERS="$iters" "$heat_exe" \
         >/dev/null 2>"$perfdir/perf.log"; then
         say "perf record failed (see ${perfdir#"$root/"}/perf.log); skipping heat capture"
         break
@@ -540,9 +519,6 @@ EOF
   fi
 fi
 
-# --- 4. hand the dump to the interface --------------------------------------
-# Built with the normal opam toolchain. Release profile: the interface's
-# current tip has warnings that the dev profile would turn into errors.
 # --- 5. hand the dump to the interface --------------------------------------
 # Built with this repo's own toolchain, not the fork's -- deliberately no
 # tc_env here. The dump's source paths are relative to the directory the
@@ -551,12 +527,16 @@ fi
 say "building the interface"
 (cd "$interface" && dune build --root . app/bin/main.exe) ||
   die "interface build failed"
-say "launching the interface on the dump"
-app_args=(-dump-file "$dump" -source-root "$build")
-[ -f "$heat" ] && app_args+=(-perf-file "$heat")
-"$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
-say "done"
+app_args=(-dump-file "$dump" -source-root "$source_root")
+# -perf-file only if this interface has it. The flag arrives with the
+# heat work; until the pinned interface carries it, passing it is an
+# unknown-option error rather than a nicety.
+if [ -f "$heat" ] &&
+  "$interface/_build/default/app/bin/main.exe" -help 2>&1 |
+  grep -q -- "-perf-file"; then
+  app_args+=(-perf-file "$heat")
+elif [ -f "$heat" ]; then
+  say "note: this interface has no -perf-file; heat profile written but not shown"
+fi
 say "replaying in the TUI (q quits, arrows step)"
-exec "$interface/_build/default/app/bin/main.exe" \
-  -dump-file "$dump" \
-  -source-root "$source_root"
+exec "$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
