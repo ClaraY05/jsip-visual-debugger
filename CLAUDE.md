@@ -107,12 +107,13 @@ its root: `cd jsip-debugger-interface && dune build --root .` (plain
 
 ## The cool_name pipeline
 
-`./cool_name.sh path/to/program.ml` runs the whole pipeline on one
-stdlib-only, single-file program. Two examples ship with it:
-`map_demo.ml` (one map, built and trimmed) and `order_book.ml` (a
-hashtable and a queue over the same records, so the heap pane draws
-each record once and points at it from the other container). Stages,
-with artifacts under `_vreplay/<program-name>/` (gitignored):
+`./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline.
+Three examples ship with it: `map_demo.ml` (one map, built and
+trimmed), `order_book.ml` (a hashtable and a queue over the same
+records, so the heap pane draws each record once and points at it from
+the other container) and `core_book.ml` (the same in Core). Artifacts go
+under `_vreplay/<program-name>/`, the toolchain under
+`_vreplay/.toolchain/`, both gitignored.
 
 1. Builds the forked compiler whenever the pinned submodule commit
    changes (stamped in `_install/.built-rev`): configure to
@@ -120,43 +121,64 @@ with artifacts under `_vreplay/<program-name>/` (gitignored):
    cases as validation, the tolerated partial install, hand-finished
    `ocamlc`/`ocamldep` symlinks. ~10 min from scratch; log at
    `_vreplay/compiler-build.log`.
-2. Generates a scratch dune project (`(modes byte)`, `-visual-replay`;
-   the module keeps the program's name when it is a valid module name)
-   and builds it with the fork as the toolchain: shim scripts put the
-   fork's `ocamlc`/`ocamldep` on PATH, each run through the fork's
-   `ocamlrun`, and `-I <compiler>/vreplay` resolves `vreplay.cma` from
-   where the fork's Makefile builds it.
-3. Runs the bytecode under the fork's `ocamlrun` with
+2. Assembles a toolchain — see below — pairing the fork's compiler with
+   an opam switch's libraries.
+3. Compiles with `-visual-replay`, in one of two modes:
+   - **project**, when there is a `dune` beside the file: the project it
+     belongs to is built where it stands, so it keeps its own libraries,
+     ppx and dependencies. Artifacts go to a private `--build-dir` so an
+     instrumented `_build` is never left in the checkout, and the
+     executable target is read out of the `dune` stanza (override with
+     `VREPLAY_TARGET`).
+   - **standalone**, for a loose `.ml`: a scratch dune project with
+     `(modes byte)`, `-visual-replay`, and `(libraries ...)` plus
+     `ppx_jane` inferred from the file's `open`s. The module keeps the
+     program's name when that is a valid module name.
+   The build directory survives between runs so dune stays incremental;
+   a change of compiler or switch invalidates it.
+4. Runs the resulting `-custom` executable with
    `VREPLAY_FILE=<name>.dump`: events go to the dump, the program's
    own output stays on the terminal. A run that fires no events
-   (nothing tracked) is an error, not an empty replay.
-4. Builds the interface and execs the TUI on the dump, with
-   `-source-root` pointed at the scratch project so the source pane
-   resolves. `q` quits, back to your shell.
+   (nothing tracked) is an error, not an empty replay. `VREPLAY_DUMP_ONLY`
+   stops here.
+5. Builds the interface and execs the TUI on the dump, with
+   `-source-root` at the project root (project mode) or the scratch
+   build context (standalone). `q` quits, back to your shell.
 
-Target programs are **stdlib-only** — no `open Core`/`Base` (cool_name
-rejects them up front). Note what this is and is not: the compiler
-*understands* Core's containers (its catalogue names them and its own
-golden cases exercise them against representation-accurate stand-ins),
-and the interface draws them. What is missing is a Core the fork can
-**link**. That is toolchain lineage, not a dune setting: the fork is
-upstream-trunk OCaml with only its own stdlib, while the opam switch's
-Core/Base — and every ppx — are built by the OxCaml `5.2.0+ox`
-compiler, whose interfaces the fork rejects outright (`Caml1999I578`
-against `Caml1999I037`).
+### The toolchain, and why it takes assembling
 
-Two ways out, in increasing order of effort:
+A compiler reads only `.cmi` files written by its own exact version —
+there is no forward compatibility in either direction, which is what
+opam switches exist to manage. The fork stamps `Caml1999I037`; the
+OxCaml `5.2.0+ox` switch this repo is otherwise built with stamps
+`Caml1999I578`. So linking Core into an instrumented program needs a
+switch whose Core was compiled *by the fork's version*. That is
+`VREPLAY_SWITCH`, default `jsip-vreplay`.
 
-- Build Core *for the fork*, in a switch of its own, and drive dune
-  with a shim `ocamlc` that adds `-visual-replay`. This is proven —
-  it is how the JSIP exchange was instrumented — and its trap is the
-  runtime: dune links `-custom`, so the C walker comes from
-  `$OCAMLLIB/libcamlrun.a`, and a stale one links clean and then
-  segfaults on the first event. It needs a private `OCAMLLIB` whose
-  runtime and `vreplay/` come from the same tree as the compiler.
-- Port the vreplay patches onto OxCaml itself, so the whole existing
-  switch (Core, ppx, dune-with-findlib) just works. Nothing to shim,
-  but it is a fork of a fork to maintain.
+That switch's own `ocamlc` is older than the pinned submodule and its
+`libcamlrun.a` is the matching older C walker, so step 2 takes its
+libraries and splices the fork's compiler and runtime over the top:
+
+- `OCAMLLIB` — a private copy of the switch's `lib/ocaml` carrying the
+  fork's `libcamlrun*` and `vreplay/*`. These two move together: the
+  fork's OCaml-side vreplay over the switch's older walker links clean
+  and then **segfaults on the first event**. `-visual-replay` puts
+  `+vreplay` on the load path itself, and `+` resolves against
+  `OCAMLLIB`, which is what lets a foreign project build with no added
+  flags — we cannot edit someone else's `dune`.
+- `PATH` — shims first (`ocamlc` is the fork's with `-visual-replay`
+  forced on, everything else symlinked from the switch), then a mirror
+  of the inherited PATH **with every OCaml binary left out**. That
+  mirror is load-bearing: dune decides native is available by finding an
+  `ocamlopt` on PATH and does *not* believe `ocamlc -config`'s
+  `native_compiler`, so any stray `ocamlopt` — there is a system OCaml
+  4.14 in `/usr/bin` — gets picked up and handed `-visual-replay`, which
+  it does not understand. Dropping `/usr/bin` wholesale is not an option
+  because `gcc` and `ld` live there.
+
+The remaining alternative, if this ever gets tiresome: port the vreplay
+patches onto OxCaml itself, so the existing switch just works. Nothing
+to shim, but it is a fork of a fork to maintain.
 
 ## Build, test, format
 
@@ -324,8 +346,9 @@ jsip-debugger-interface/   submodule: frontend, tracking
                            and skills)
 cool_name.sh               the pipeline driver (see above)
 examples/                  sample inputs for it: map_demo.ml,
-                           order_book.ml
-_vreplay/                  its gitignored working area
+                           order_book.ml, core_book.ml
+_vreplay/                  its gitignored working area, including the
+                           assembled .toolchain/
 dune                       excludes the submodules from the workspace
 lib/
   hello/

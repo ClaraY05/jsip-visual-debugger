@@ -9,19 +9,36 @@ debugger TUI:
 git submodule update --init --recursive   # once, after cloning
 ./cool_name.sh examples/map_demo.ml       # one map, built and trimmed
 ./cool_name.sh examples/order_book.ml     # two containers over shared records
+./cool_name.sh examples/core_book.ml      # the same, in Core
 ```
 
-The first run also builds the forked compiler (~10 min); later runs
-reuse it until the pinned commit changes.
+The first run also builds the forked compiler (~10 min) and assembles a
+toolchain from it; later runs reuse both until the pinned commit changes.
 
-What gets recorded: calls involving a stdlib
-`Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray`, and every binding of a
-value whose type the program declares itself — so a record of your own
-is a first-class thing on the heap pane, not just some container's
-contents. Target programs are stdlib-only for now: no `open
-Core`/`Base`. The compiler *understands* Core's containers; what is
-missing is a Core built for it. `CLAUDE.md` has how the pieces fit
-together and the two ways to lift that.
+Point it at a loose `.ml` file and it is wrapped in a scratch dune
+project. Point it at a file that is **already a dune target** — one with
+a `dune` beside it — and the project it belongs to is built where it
+stands, keeping its own libraries, ppx and dependencies. That is how a
+whole program comes in:
+
+```sh
+./cool_name.sh ~/jsip-exchange/app/debug_scenario/bin/main.ml
+```
+
+Artifacts go to a private `--build-dir`, so an instrumented `_build` is
+never left behind in the project's checkout.
+
+What gets recorded: calls involving a tracked container — the stdlib's
+`Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and Core's equivalents,
+17 in all — and every binding of a value whose type the program declares
+itself, so a record of your own is a first-class thing on the heap pane
+rather than just some container's contents. One asymmetry to know: an
+event rooted at a **mutation** needs a named identifier, so
+`Hashtbl.set tbl ~key ~data` is recorded and `Hashtbl.set t.field ...` is
+not, while a tracked **result** fires through record fields either way.
+
+`CLAUDE.md` has how the pieces fit together, including why linking Core
+needs a switch built by the fork's own compiler and how that is wired up.
 
 ---
 
