@@ -1,0 +1,5 @@
+(executable
+ (name order_book)
+ (libraries core)
+ (preprocess
+  (pps ppx_jane)))

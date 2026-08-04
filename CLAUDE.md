@@ -107,13 +107,16 @@ its root: `cd jsip-debugger-interface && dune build --root .` (plain
 
 ## The cool_name pipeline
 
-`./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline.
-Three examples ship with it: `map_demo.ml` (one map, built and
-trimmed), `order_book.ml` (a hashtable and a queue over the same
-records, so the heap pane draws each record once and points at it from
-the other container) and `core_book.ml` (the same in Core). Artifacts go
-under `_vreplay/<program-name>/`, the toolchain under
-`_vreplay/.toolchain/`, both gitignored.
+`./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline,
+or `path/to/target.exe` to name a dune target instead of a source file.
+Two examples ship with it: `map_demo.ml` (one map, built and trimmed)
+and `order_book/` (a Core limit order book with price-time priority — a
+`Map` of price levels over `Hash_queue`s, a `Hashtbl` id index, two
+`Hash_set`s and an `Fdeque` tape, all holding the same order records, so
+the heap pane draws each order once and points at it from every
+container it is in; 189 events, six `ds_type`s). Artifacts go under
+`_vreplay/<program-name>/`, the toolchain under `_vreplay/.toolchain/`,
+both gitignored.
 
 1. Builds the forked compiler whenever the pinned submodule commit
    changes (stamped in `_install/.built-rev`): configure to
@@ -346,7 +349,7 @@ jsip-debugger-interface/   submodule: frontend, tracking
                            and skills)
 cool_name.sh               the pipeline driver (see above)
 examples/                  sample inputs for it: map_demo.ml,
-                           order_book.ml, core_book.ml
+                           order_book/ (Core)
 _vreplay/                  its gitignored working area, including the
                            assembled .toolchain/
 dune                       excludes the submodules from the workspace
