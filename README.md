@@ -30,6 +30,33 @@ how a whole program comes in:
 Artifacts go to a private `--build-dir`, so an instrumented `_build` is
 never left behind in the project's checkout.
 
+### Capturing a long-running program
+
+An exchange scenario runs until interrupted, so capture first and replay
+after — `VREPLAY_DUMP_ONLY` stops the pipeline once the dump is on disk:
+
+```sh
+VREPLAY_DUMP_ONLY=1 ./cool_name.sh \
+  ../test/jsip-exchange/app/scenario_runner/bin/main.exe -scenario book-filler -seed 0
+# let the market run 15–30 seconds, then Ctrl-C
+
+sed -i '${/^[{}]*$/d}' _vreplay/main/main.dump    # drop the torn final marker line
+
+jsip-debugger-interface/_build/default/app/bin/main.exe \
+  -dump-file _vreplay/main/main.dump \
+  -source-root _vreplay/main/build/default
+```
+
+Interrupting mid-event tears the dump's last line, which the reader
+rejects — the `sed` deletes it. Load time scales with the capture (a
+two-minute run is ~18k events and takes about a minute to open; 20–30
+seconds of market opens in seconds), and on a dump that size the
+navigation aids earn their keep: `/` filters structures, `z` is
+accordion mode, `h` collapses at the cursor. The exchange checkout must
+build against the toolchain's library versions — see the
+`vreplay-compat` branch in the exchange repo for the (small, mechanical)
+compatibility pass.
+
 For programs whose sources are ours — a loose file or a directory, not
 someone else's dune project — it also captures a **perf heat profile**:
 the unchanged program text, compiled natively and looped in-process,
