@@ -109,9 +109,13 @@ its root: `cd jsip-debugger-interface && dune build --root .` (plain
 
 `./cool_name.sh path/to/program.ml` runs the whole pipeline on one
 stdlib-only, single-file program. Two examples ship with it:
-`map_demo.ml` (one map, built and trimmed) and `order_book.ml` (a
-hashtable and a queue over the same records, so the heap pane draws
-each record once and points at it from the other container). Stages,
+`map_demo.ml` (one map, built and trimmed) and `order_book/` (a Core
+limit order book with price-time priority — a `Map` of price levels
+over `Hash_queue`s, a `Hashtbl` id index, two `Hash_set`s and an
+`Fdeque` tape, all holding the same order records, so the heap pane
+draws each order once and points at it from every container it is in).
+The order book needs a pipeline that can link Core; see
+`examples/order_book/order_book.ml` for what it exercises. Stages,
 with artifacts under `_vreplay/<program-name>/` (gitignored):
 
 1. Builds the forked compiler whenever the pinned submodule commit
@@ -324,7 +328,7 @@ jsip-debugger-interface/   submodule: frontend, tracking
                            and skills)
 cool_name.sh               the pipeline driver (see above)
 examples/                  sample inputs for it: map_demo.ml,
-                           order_book.ml
+                           order_book/ (Core)
 _vreplay/                  its gitignored working area
 dune                       excludes the submodules from the workspace
 lib/

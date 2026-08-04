@@ -7,21 +7,23 @@ debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
-./cool_name.sh examples/map_demo.ml       # one map, built and trimmed
-./cool_name.sh examples/order_book.ml     # two containers over shared records
+./cool_name.sh examples/map_demo.ml                # one map, built and trimmed
+./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
 
 The first run also builds the forked compiler (~10 min); later runs
 reuse it until the pinned commit changes.
 
-What gets recorded: calls involving a stdlib
-`Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray`, and every binding of a
-value whose type the program declares itself — so a record of your own
-is a first-class thing on the heap pane, not just some container's
-contents. Target programs are stdlib-only for now: no `open
-Core`/`Base`. The compiler *understands* Core's containers; what is
-missing is a Core built for it. `CLAUDE.md` has how the pieces fit
-together and the two ways to lift that.
+What gets recorded: calls involving a container the compiler knows —
+the stdlib's `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and
+Core's `Map`/`Set`/`Hashtbl`/`Hash_set`/`Hash_queue`/`Queue`/`Stack`/
+`Deque`/`Fdeque`/`Doubly_linked` — and every binding of a value whose
+type the program declares itself, so a record of your own is a
+first-class thing on the heap pane, not just some container's contents.
+Core's containers are recorded under their own names (`core.map`,
+`core.hash_queue`, …) rather than folded into the stdlib's: a Core map
+is a record over a tagged tree where the stdlib's map *is* the tree.
+`CLAUDE.md` has how the pieces fit together.
 
 ---
 
