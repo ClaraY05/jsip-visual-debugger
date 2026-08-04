@@ -62,6 +62,30 @@ prog="$(cd "$(dirname "$prog")" && pwd)/$(basename "$prog")"
 [ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
   die "submodules missing; run: git submodule update --init --recursive"
 
+# ...and the compiler submodule has to be the *fork*, not whatever OCaml
+# happens to be sitting in that directory. Moving the gitlink -- merging
+# a PR that bumps the pin, switching branches -- does not move the
+# submodule's own checkout, so it can be left parked on upstream trunk.
+# Without this check that builds for four minutes, produces a compiler
+# with no -visual-replay in it, and only then trips over the missing
+# test script.
+[ -d "$compiler/vreplay" ] && [ -f "$compiler/testing/run_tests.sh" ] ||
+  die "$compiler is not the instrumenting fork: no vreplay/ or testing/. \
+The submodule checkout is probably parked on upstream trunk while the \
+gitlink points at vreplay-main. Run: git submodule update --init \
+--recursive"
+
+# Right repo, wrong commit is the quieter version of the same thing, and
+# it is legitimate when someone is testing a compiler ahead of the pin --
+# so say it rather than refuse.
+for sub in jsip-debugger-compiler jsip-debugger-interface; do
+  pinned="$(git -C "$root" ls-tree HEAD "$sub" 2>/dev/null | awk '{print $3}')"
+  actual="$(git -C "$root/$sub" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$pinned" ] && [ -n "$actual" ] && [ "$pinned" != "$actual" ] &&
+    say "note: $sub is at ${actual:0:12}, pinned at ${pinned:0:12}"
+done
+true
+
 name="$(basename "$prog")"
 name="${name%.ml}"
 name="${name%.exe}"
