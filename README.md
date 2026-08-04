@@ -2,15 +2,48 @@
 
 The outer shell of the JSIP visual replay debugger. One command runs the
 whole pipeline — compile a program with the forked, instrumenting
-compiler, capture its replay dump, and hand the dump to the interface:
+compiler, capture its replay dump, and step through the run in the
+debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
-./cool_name.sh examples/greet.ml
+./cool_name.sh examples/map_demo.ml                # one map, built and trimmed
+./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
 
-The first run also builds the forked compiler (~10 min). See `CLAUDE.md`
-for how the pieces fit together.
+The first run also builds the forked compiler (~10 min) and assembles a
+toolchain from it; later runs reuse both until the pinned commit changes.
+
+Give it a loose `.ml` file and it is wrapped in a scratch dune project.
+Give it something that is **already a dune target** — either the `.exe`,
+as the order book above does, or an `.ml` with a `dune` beside it — and
+the project it belongs to is built where it stands, keeping its own
+libraries, ppx and dependencies. That is how a whole program comes in:
+
+```sh
+./cool_name.sh ~/jsip-exchange/app/debug_scenario/bin/main.exe
+```
+
+Artifacts go to a private `--build-dir`, so an instrumented `_build` is
+never left behind in the project's checkout.
+
+What gets recorded: calls involving a container the compiler knows —
+the stdlib's `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and
+Core's `Map`/`Set`/`Hashtbl`/`Hash_set`/`Hash_queue`/`Queue`/`Stack`/
+`Deque`/`Fdeque`/`Doubly_linked` — and every binding of a value whose
+type the program declares itself, so a record of your own is a
+first-class thing on the heap pane, not just some container's contents.
+Core's containers are recorded under their own names (`core.map`,
+`core.hash_queue`, …) rather than folded into the stdlib's: a Core map
+is a record over a tagged tree where the stdlib's map *is* the tree.
+
+One asymmetry to know: an event rooted at a **mutation** needs a named
+identifier, so `Hashtbl.set tbl ~key ~data` is recorded and
+`Hashtbl.set t.field ...` is not, while a tracked **result** fires
+through record fields either way.
+
+`CLAUDE.md` has how the pieces fit together, including why linking Core
+needs a switch built by the fork's own compiler and how that is wired up.
 
 ---
 

@@ -1,8 +1,8 @@
 [submodule "jsip-debugger-interface"]
 	path = jsip-debugger-interface
 	url = https://github.com/wuad391/jsip-debugger-interface
-	branch = parsing
+	branch = worktree-debugger-tui
 [submodule "jsip-debugger-compiler"]
 	path = jsip-debugger-compiler
 	url = https://github.com/ClaraY05/jsip-debugger-compiler
-	branch = c/vreplay-registry-dynarray
+	branch = vreplay-main
