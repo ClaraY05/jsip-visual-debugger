@@ -40,20 +40,31 @@ die() {
   exit 1
 }
 
-[ $# -ge 1 ] || die "usage: ./cool_name.sh path/to/program.ml [args...]"
+[ $# -ge 1 ] ||
+  die "usage: ./cool_name.sh path/to/program.ml [args...]
+             ./cool_name.sh path/to/target.exe [args...]"
 prog="$1"
 shift
 prog_args=("$@")
-[ -f "$prog" ] || die "no such file: $prog"
+# Either an .ml file to instrument, or the dune target to build -- the
+# second is the one to reach for in a project that already has a `dune`
+# saying what its executable is called.
 case "$prog" in
-*.ml) ;;
-*) die "expected an .ml file, got: $prog" ;;
+*.ml)
+  [ -f "$prog" ] || die "no such file: $prog"
+  ;;
+*.exe)
+  [ -d "$(dirname "$prog")" ] || die "no such directory: $(dirname "$prog")"
+  ;;
+*) die "expected an .ml file or a dune .exe target, got: $prog" ;;
 esac
 prog="$(cd "$(dirname "$prog")" && pwd)/$(basename "$prog")"
 [ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
   die "submodules missing; run: git submodule update --init --recursive"
 
-name="$(basename "${prog%.ml}")"
+name="$(basename "$prog")"
+name="${name%.ml}"
+name="${name%.exe}"
 work="$root/_vreplay/$name"
 dump="$work/$name.dump"
 mkdir -p "$work"
@@ -248,6 +259,14 @@ if [ -f "$progdir/dune" ]; then
     d="$(dirname "$d")"
   done
 fi
+case "$prog" in
+*.exe)
+  [ -n "$projroot" ] ||
+    die "$prog names a dune target, but $progdir has no dune file with a \
+dune-project above it. Pass the .ml instead to have it wrapped in a \
+scratch project."
+  ;;
+esac
 
 # Kept between runs so dune can be incremental -- a second look at the
 # same program is worth seconds, not a rebuild. The toolchain is the one
@@ -268,6 +287,12 @@ if [ -n "$projroot" ]; then
   [ "$reldir" = "$progdir" ] && reldir="."
   mapfile -t cands < <(dune_exe_names "$progdir/dune")
   target="${VREPLAY_TARGET:-}"
+  # An .exe argument named the target outright; an .ml has to be traced
+  # back to the executable that includes it -- by name if the dune file
+  # declares one that matches, otherwise by there being only one.
+  case "$prog" in
+  *.exe) [ -n "$target" ] || target="$name" ;;
+  esac
   if [ -z "$target" ]; then
     for c in ${cands[*]+"${cands[@]}"}; do
       [ "$c" = "$name" ] && target="$c"
