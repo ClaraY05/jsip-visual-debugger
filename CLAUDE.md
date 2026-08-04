@@ -122,8 +122,9 @@ both gitignored.
    changes (stamped in `_install/.built-rev`): configure to
    `_install`, bytecode `make world`, one of the fork's golden-dump
    cases as validation, the tolerated partial install, hand-finished
-   `ocamlc`/`ocamldep` symlinks. 3 min 35 s from scratch on 4 cores
-   (measured 2026-08-03, all 464 `.cmo`s built, nothing reused); log at
+   `ocamlc`/`ocamldep` symlinks. 3½–4¼ min from scratch on 4 cores (two
+   measured builds, 2026-08-03 and 2026-08-04: 3 min 35 s and 4 min 16 s,
+   464 `.cmo`s each with nothing reused); log at
    `_vreplay/compiler-build.log`.
 2. Assembles a toolchain — see below — pairing the fork's compiler with
    an opam switch's libraries.
