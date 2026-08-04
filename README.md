@@ -11,7 +11,7 @@ git submodule update --init --recursive   # once, after cloning
 ./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
 
-The first run also builds the forked compiler (~10 min) and assembles a
+The first run also builds the forked compiler (~4 min) and assembles a
 toolchain from it; later runs reuse both until the pinned commit changes.
 
 Give it a loose `.ml` file and it is wrapped in a scratch dune project.

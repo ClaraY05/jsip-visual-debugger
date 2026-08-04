@@ -83,7 +83,7 @@ want_rev="$(git -C "$compiler" rev-parse HEAD)"
 built_rev="$(cat "$prefix/.built-rev" 2>/dev/null || true)"
 
 if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/vreplay.cma" ]; then
-  say "building the forked compiler at ${want_rev:0:12} (~10 min from scratch)"
+  say "building the forked compiler at ${want_rev:0:12} (~4 min from scratch)"
   # `make install` is expected to die partway: on a bytecode-only tree it
   # aborts at tools/ocamldep.opt, after everything we need (runtime,
   # stdlib, byte binaries) is already in place. Tolerate it, hand-finish
