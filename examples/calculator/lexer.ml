@@ -1,9 +1,12 @@
-(* Turns "let a = 2 + 3 * (b - 1)" into a list of tokens. *)
+(* Turns "let a = 2 + 3 * (b - 1)" into a queue of tokens. The queue is a
+   structure the replay instrumentation tracks, so the debugger shows it
+   fill here token by token — and drain again over in [Parser]. *)
 
 type token =
   | Number of int
   | Ident of string
   | Keyword_let
+  | Keyword_def
   | Equals
   | Plus
   | Minus
@@ -25,22 +28,29 @@ let read_while input pred start =
 ;;
 
 let tokenize input =
-  let rec go i acc =
-    if i >= String.length input
-    then List.rev acc
-    else (
+  let tokens = Queue.create () in
+  let rec go i =
+    if i < String.length input
+    then (
       let c = input.[i] in
       if c = ' '
-      then go (i + 1) acc
+      then go (i + 1)
       else if is_digit c
       then (
         let text, next = read_while input is_digit i in
-        go next (Number (int_of_string text) :: acc))
+        Queue.add (Number (int_of_string text)) tokens;
+        go next)
       else if is_alpha c
       then (
         let text, next = read_while input is_alpha i in
-        let token = if text = "let" then Keyword_let else Ident text in
-        go next (token :: acc))
+        let token =
+          match text with
+          | "let" -> Keyword_let
+          | "def" -> Keyword_def
+          | _ -> Ident text
+        in
+        Queue.add token tokens;
+        go next)
       else (
         let token =
           match c with
@@ -53,7 +63,9 @@ let tokenize input =
           | ')' -> Rparen
           | _ -> failwith (Printf.sprintf "unexpected character %c" c)
         in
-        go (i + 1) (token :: acc)))
+        Queue.add token tokens;
+        go (i + 1)))
   in
-  go 0 []
+  go 0;
+  tokens
 ;;

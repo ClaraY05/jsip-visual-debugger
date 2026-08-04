@@ -127,8 +127,11 @@ naming a dune target instead of a source file.
 running against clones ahead of the pins.
 
 The examples: `map_demo.ml` (one map, built and trimmed), `map_fold.ml`,
-`calculator/` (multi-file — lexer → parser → evaluator over a `Map`
-environment) and `order_book/` (a Core limit order book with price-time
+`calculator/` (multi-file — lexer → parser → evaluator → stats, with a
+token `Queue` filled in one file and drained in another, a `Map`
+environment, a `Hashtbl` memo, an operator-stats `Map` and a results
+`Stack`; `def` lines defer their bodies so evaluation calls back into
+the parser — 114 events over four `ds_type`s) and `order_book/` (a Core limit order book with price-time
 priority — a
 `Map` of price levels over `Hash_queue`s, a `Hashtbl` id index, two
 `Hash_set`s and an `Fdeque` tape, all holding the same order records, so
