@@ -12,6 +12,35 @@ git submodule update --init --recursive   # once, after cloning
 The first run also builds the forked compiler (~10 min). See `CLAUDE.md`
 for how the pieces fit together.
 
+## Compute heat profiles
+
+Alongside the replay dump, the pipeline perf-samples the **unchanged**
+program — natively compiled with the `5.2.0+ox` opam switch's `ocamlopt`
+and looped in-process so even a microsecond-scale program accumulates
+enough samples — and distills the report into a per-function compute
+profile, `_vreplay/<name>/heat.sexp`:
+
+```
+((version 1) (root_module Greet)
+ (entries
+  (((module_path (Greet)) (kind (Named shout)) (samples 8841))
+   ((module_path (Greet)) (kind (Named generate_string)) (samples 3819)))))
+```
+
+That sexp is the data contract with the interface (mirrored by its
+`Jsip_types.Heat_profile`), which colors each call-stack row by its
+function's share of sampled compute. `lib/perf_heat` holds the symbol
+demangler, perf-report parser, and profile writer; `bin/perf_heat.exe`
+is the report → sexp step `cool_name.sh` pipes through. The stage is
+optional: no `perf` or no native switch just means a heat-less replay.
+
+Caveats worth knowing: flambda2 may inline small functions away (they
+show as "no data", not "cheap"), a `C_CALL`'s work is attributed to the
+runtime rather than the calling function, and shares are measured on the
+looped build. `COMPILER_DIR`/`INTERFACE_DIR` env vars point the pipeline
+at checkouts other than the pinned submodules; `JSIP_HEAT_SWITCH`
+overrides the opam switch used for the native build.
+
 ---
 
 Based on an OCaml project template in the Jane Street style: [`Core`](https://opam.ocaml.org/packages/core/)

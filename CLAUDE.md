@@ -110,13 +110,28 @@ stdlib-only, single-file program; try
    shim scripts put the fork's `ocamlc`/`ocamldep` on PATH, each run
    through the fork's `ocamlrun`, and `-I <compiler>/vreplay` resolves
    `vreplay.cma` from where the fork's Makefile builds it.
-3. Runs the bytecode under the fork's `ocamlrun`, capturing stdout as
-   `dump.txt` — replay events interleaved with the program's own
-   prints, for now.
+3. Runs the bytecode under the fork's `ocamlrun` with
+   `VREPLAY_FILE=dump.txt` (newer fork branches write the events to
+   that sink; if the runtime ignored it, the captured stdout — the old
+   behavior — becomes the dump instead).
+3b. Perf heat capture (optional; skipped with a warning when `perf` or
+   the `5.2.0+ox` switch is missing): wraps the *unchanged* program
+   text in an in-process loop, compiles it natively
+   (`opam exec --switch 5.2.0+ox -- ocamlopt -g`), calibrates to ~3 s
+   of wall time, records with `perf record -F max`, and pipes
+   `perf report -F sample,sym` through `bin/perf_heat.exe`
+   (`lib/perf_heat`: demangler, report parser, aggregator) into
+   `heat.sexp` — the per-function compute profile the interface's
+   `-perf-file` flag consumes. `JSIP_HEAT_SWITCH` overrides the
+   switch; exit 3 from `perf_heat.exe` (too few samples) triggers one
+   ×10-iterations retry.
 4. Builds the interface (`--profile release`) and invokes
-   `app/bin/main.exe <dump>`. Today that parses nothing (the
-   interface's CLI is commented out); the handoff is wired for when it
-   lands.
+   `app/bin/main.exe -dump-file <dump> -source-root <build>` plus
+   `-perf-file <heat.sexp>` when stage 3b produced one.
+   `COMPILER_DIR`/`INTERFACE_DIR` env vars point stages at checkouts
+   other than the pinned submodules (the pinned interface predates
+   these flags but ignores argv entirely, so the handoff is harmless
+   there).
 
 ## Build, test, format
 

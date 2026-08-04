@@ -1,5 +1,13 @@
 (executable
  (name main)
+ (modules main)
  (libraries sandbox_hello core)
+ (preprocess
+  (pps ppx_jane)))
+
+(executable
+ (name perf_heat)
+ (modules perf_heat)
+ (libraries sandbox_perf_heat core)
  (preprocess
   (pps ppx_jane)))
