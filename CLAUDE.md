@@ -119,11 +119,11 @@ stdlib-only, single-file program; try
    text in an in-process loop, compiles it natively
    (`opam exec --switch 5.2.0+ox -- ocamlopt -g`), calibrates to ~3 s
    of wall time, records with `perf record -F max`, and pipes
-   `perf report -F sample,sym` through `bin/perf_heat.exe`
-   (`lib/perf_heat`: demangler, report parser, aggregator) into
+   `perf report -F sample,sym` through `bin/perf_heat_interface.exe`
+   (`perf_heat/`: demangler, report parser, aggregator) into
    `heat.sexp` — the per-function compute profile the interface's
    `-perf-file` flag consumes. `JSIP_HEAT_SWITCH` overrides the
-   switch; exit 3 from `perf_heat.exe` (too few samples) triggers one
+   switch; exit 3 from `perf_heat_interface.exe` (too few samples) triggers one
    ×10-iterations retry.
 4. Builds the interface (`--profile release`) and invokes
    `app/bin/main.exe -dump-file <dump> -source-root <build>` plus

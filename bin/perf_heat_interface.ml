@@ -5,7 +5,7 @@
     Run by cool_name.sh's perf stage:
 
     {v
-    perf report ... -F sample,sym | perf_heat.exe Greet heat.sexp
+    perf report ... -F sample,sym | perf_heat_interface.exe Greet heat.sexp
     v}
 
     Exits 0 on success, 1 on a malformed report, 2 on usage error, and 3 when
@@ -25,7 +25,9 @@ let min_samples () =
     (match Int.of_string_opt value with
      | Some minimum -> minimum
      | None ->
-       eprintf "perf_heat: JSIP_HEAT_MIN_SAMPLES is not a number: %s\n" value;
+       eprintf
+         "perf_heat_interface: JSIP_HEAT_MIN_SAMPLES is not a number: %s\n"
+         value;
        exit 2)
 ;;
 
@@ -35,7 +37,7 @@ let () =
     let report_text = In_channel.input_all In_channel.stdin in
     (match Heat_profile.of_perf_report ~report_text ~root_module with
      | Error error ->
-       eprintf "perf_heat: %s\n" (Error.to_string_hum error);
+       eprintf "perf_heat_interface: %s\n" (Error.to_string_hum error);
        exit 1
      | Ok profile ->
        let total = Heat_profile.total_samples profile in
@@ -44,18 +46,19 @@ let () =
         | true ->
           Heat_profile.save profile ~file:out_file;
           eprintf
-            "perf_heat: %d OCaml-attributed samples -> %s\n"
+            "perf_heat_interface: %d OCaml-attributed samples -> %s\n"
             total
             out_file
         | false ->
           eprintf
-            "perf_heat: only %d OCaml-attributed samples (need %d); not \
-             writing %s\n"
+            "perf_heat_interface: only %d OCaml-attributed samples (need \
+             %d); not writing %s\n"
             total
             minimum
             out_file;
           exit 3))
   | _ ->
-    eprintf "usage: perf_heat.exe <Root_module> <out.sexp> < report.txt\n";
+    eprintf
+      "usage: perf_heat_interface.exe <Root_module> <out.sexp> < report.txt\n";
     exit 2
 ;;

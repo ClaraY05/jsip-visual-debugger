@@ -6,8 +6,8 @@
   (pps ppx_jane)))
 
 (executable
- (name perf_heat)
- (modules perf_heat)
+ (name perf_heat_interface)
+ (modules perf_heat_interface)
  (libraries sandbox_perf_heat core)
  (preprocess
   (pps ppx_jane)))

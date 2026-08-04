@@ -29,9 +29,9 @@ profile, `_vreplay/<name>/heat.sexp`:
 
 That sexp is the data contract with the interface (mirrored by its
 `Jsip_types.Heat_profile`), which colors each call-stack row by its
-function's share of sampled compute. `lib/perf_heat` holds the symbol
-demangler, perf-report parser, and profile writer; `bin/perf_heat.exe`
-is the report → sexp step `cool_name.sh` pipes through. The stage is
+function's share of sampled compute. `perf_heat/` (a top-level peer of the two
+submodules, since it too produces the interface's input data) holds the symbol
+demangler, perf-report parser, and profile writer; `bin/perf_heat_interface.exe` is the CLI face of perf — the report → sexp step `cool_name.sh` pipes through. The stage is
 optional: no `perf` or no native switch just means a heat-less replay.
 
 Caveats worth knowing: flambda2 may inline small functions away (they

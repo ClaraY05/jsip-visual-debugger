@@ -169,8 +169,8 @@ else
     iters=$((calib_iters * 3000 / elapsed_ms))
     [ "$iters" -lt 10000 ] && iters=10000
     [ "$iters" -gt 50000000 ] && iters=50000000
-    (cd "$root" && dune build bin/perf_heat.exe) ||
-      die "perf_heat build failed"
+    (cd "$root" && dune build bin/perf_heat_interface.exe) ||
+      die "perf_heat_interface build failed"
     for attempt in 1 2; do
       if ! perf record -F max -o "$perfdir/perf.data" -- \
         env JSIP_HEAT_ITERS="$iters" "$perfdir/prog.exe" \
@@ -181,7 +181,7 @@ else
       status=0
       perf report -i "$perfdir/perf.data" --stdio --dsos prog.exe \
         --percent-limit 0 -F sample,sym 2>/dev/null |
-        "$root/_build/default/bin/perf_heat.exe" "$module_name" "$heat" ||
+        "$root/_build/default/bin/perf_heat_interface.exe" "$module_name" "$heat" ||
         status=$?
       if [ "$status" -eq 0 ]; then
         say "heat profile: ${heat#"$root/"}"
