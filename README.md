@@ -8,7 +8,7 @@ debugger TUI:
 ```sh
 git submodule update --init --recursive   # once, after cloning
 ./cool_name.sh examples/map_demo.ml                # one map, built and trimmed
-./cool_name.sh examples/calculator                 # multi-file: lexer → parser → eval
+./cool_name.sh examples/calculator                 # multi-file: lexer → parser → eval, lazy defs
 ./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
 

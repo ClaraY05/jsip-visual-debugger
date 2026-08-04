@@ -1,6 +1,8 @@
-(* Recursive descent over a [Lexer.token list]: expressions with the usual
-   precedence (factors bind tighter than terms), and [let name = expr]
-   bindings. *)
+(* Recursive descent: expressions with the usual precedence (factors bind
+   tighter than terms), [let name = expr] eager bindings, and
+   [def name = expr] deferred ones — a [def]'s body is kept as raw tokens
+   and only parsed when the evaluator first needs it, so parsing calls
+   appear inside evaluation in the debugger's call stack. *)
 
 type expr =
   | Number of int
@@ -12,6 +14,7 @@ type expr =
 
 type statement =
   | Bind of string * expr
+  | Define of string * Lexer.token list
   | Evaluate of expr
 
 (* factor := number | variable | ( expr ) *)
@@ -57,16 +60,35 @@ and parse_expr tokens =
   loop left rest
 ;;
 
+(* a whole expression and nothing else — also what the evaluator calls
+   when it finally parses a [def]'s saved body *)
+let parse_expr_exn tokens =
+  let expr, rest = parse_expr tokens in
+  match rest with
+  | [] -> expr
+  | _ :: _ -> failwith "trailing tokens after an expression"
+;;
+
+(* drain the lexer's queue into a list, front to back *)
+let rec drain tokens =
+  match Queue.take_opt tokens with
+  | Some token -> token :: drain tokens
+  | None -> []
+;;
+
 let parse tokens =
-  match tokens with
-  | Lexer.Keyword_let :: Lexer.Ident name :: Lexer.Equals :: rest ->
-    let expr, rest = parse_expr rest in
-    (match rest with
-     | [] -> Bind (name, expr)
-     | _ -> failwith "trailing tokens after a binding")
-  | _ ->
-    let expr, rest = parse_expr tokens in
-    (match rest with
-     | [] -> Evaluate expr
-     | _ -> failwith "trailing tokens after an expression")
+  match Queue.take_opt tokens with
+  | Some Lexer.Keyword_let ->
+    (match Queue.take_opt tokens, Queue.take_opt tokens with
+     | Some (Lexer.Ident name), Some Lexer.Equals ->
+       Bind (name, parse_expr_exn (drain tokens))
+     | _ -> failwith "expected: let <name> = <expr>")
+  | Some Lexer.Keyword_def ->
+    (match Queue.take_opt tokens, Queue.take_opt tokens with
+     | Some (Lexer.Ident name), Some Lexer.Equals ->
+       (* deferred: keep the raw tokens, parse on first use *)
+       Define (name, drain tokens)
+     | _ -> failwith "expected: def <name> = <expr>")
+  | Some first -> Evaluate (parse_expr_exn (first :: drain tokens))
+  | None -> failwith "empty line"
 ;;
