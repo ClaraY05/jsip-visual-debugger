@@ -30,13 +30,20 @@ and watch the call stack, source position, and heap shapes evolve.
 `git clone --recurse-submodules`, or after the fact
 `git submodule update --init --recursive` (the compiler has its own
 `flexdll` submodule, hence `--recursive`). Each submodule is pinned to
-the work branch named in `.gitmodules` — compiler: `vreplay-main`
-(its integration branch), interface: `worktree-debugger-tui` — so to
-pick up new submodule commits: `git submodule update --remote --merge`,
-then commit the bumped pointers here. Re-pin the interface to `main`
-once the TUI branch merges. Submodules check out detached; don't
-develop inside them from this repo — push branches in their own repos,
-then bump the pointer.
+the branch named in `.gitmodules` — compiler: `vreplay-main` (its
+integration branch), interface: `main` (the TUI branch merged there
+2026-08-04) — so to pick up new submodule commits:
+`git submodule update --remote --merge`, then commit the bumped
+pointers here. Submodules check out detached; don't develop inside them
+from this repo — push branches in their own repos, then bump the
+pointer.
+
+Bumping a pointer is only half of it: **merging a commit that moves a
+gitlink does not move anybody's submodule checkout**, so everyone who
+pulls needs `git submodule update --init --recursive` before the
+pipeline will work. `cool_name.sh` checks for the fork's `vreplay/` and
+`testing/` up front so a stale checkout fails in a second rather than
+after a four-minute build of the wrong compiler.
 
 ### jsip-debugger-compiler
 
@@ -82,12 +89,17 @@ including `AI.md` (disclose AI-generated portions).
 ### jsip-debugger-interface
 
 The frontend, at <https://github.com/wuad391/jsip-debugger-interface>,
-pinned to `worktree-debugger-tui`: the GDB-style terminal interface
-built on bonsai_term — its README has the pane-by-pane tour and key
-bindings. Layout: `lib/types` (calls, locations, snapshots, the call
-stack), `lib/parsing` (dump reader and source loader), `lib/replay`
-(the per-step replay model), `lib/tui` (panes, theme, app), and
-`app/bin/main.exe`, run as
+pinned to `main`: the GDB-style terminal interface built on bonsai_term
+— its README has the pane-by-pane tour and key bindings. The ones that
+make a big run navigable, since the heap pane lists every live structure
+in registry order and a real program has hundreds: `z` for accordion
+mode (everything collapses but the structure you are on), `/` to filter
+structures by name, kind or type — it owns up to the cut with
+`/order · 42 of 1223 live` — node counts on the headers, `h` to collapse
+whatever the cursor points at, and `[`/`]` to pan by hand. Layout:
+`lib/types` (calls, locations, snapshots, the call stack), `lib/parsing`
+(dump reader and source loader), `lib/replay` (the per-step replay
+model), `lib/tui` (panes, theme, app), and `app/bin/main.exe`, run as
 `main.exe -dump-file FILE [-source-root DIR]`. `testing/` vendors the
 compiler's golden dumps verbatim, and the expect tests run on them.
 Builds and tests clean on the OxCaml switch with plain `dune build` /
@@ -366,9 +378,8 @@ dune discovers libraries automatically as long as they have a `dune` file.
 ```
 jsip-debugger-compiler/    submodule: OCaml compiler fork, tracking
                            vreplay-main
-jsip-debugger-interface/   submodule: frontend, tracking
-                           worktree-debugger-tui (has its own CLAUDE.md
-                           and skills)
+jsip-debugger-interface/   submodule: frontend, tracking main (has its
+                           own CLAUDE.md and skills)
 cool_name.sh               the pipeline driver (see above)
 examples/                  sample inputs for it: map_demo.ml,
                            map_fold.ml, calculator/ (multi-file),
