@@ -184,15 +184,18 @@ both gitignored.
    **Optional throughout**: every failure leaves a line in
    `_vreplay/<prog>/perf/verdict` and the run carries on without heat.
 
-   Three passes, in order, because no one of them covers everything:
-   one recorded run; then, on exit 3 (fewer than 2000 samples in OCaml
-   code), the twin looped from the *outside* — no source rewriting, so
-   multi-file and foreign projects work; then, only for a single file,
-   the source wrapped in an *in-process* loop. That last one exists
-   because a millisecond program re-exec'd 10,000 times samples nothing
-   but `caml_init_domains` and the dynamic linker — the runtime coming
-   up, never the program. It is last because wrapping source is what
-   costs the generality the other two have.
+   Two passes. It records the twin **looped from the outside** — a bare
+   run is timed only to size the loop for ~10 s of wall clock. There is
+   no single-run pass: every program here is milliseconds (the
+   exchange's twin is 20 ms; its 11 s instrumented run is instrumentation
+   overhead), so one recording never clears the distiller's 2000-sample
+   floor. Then, on exit 3 and only for a single file, the source is
+   wrapped in an *in-process* loop. That exists because looping the twin
+   only helps when a run does more work than starting a process does:
+   below that line every sample is `caml_init_domains` and the dynamic
+   linker. `map_demo` is the case — 200,000 runs gave 934k samples, 207
+   in the twin's binary, all of them startup. It goes second because
+   wrapping source is what costs the generality the first pass has.
 4. Runs the resulting `-custom` executable with
    `VREPLAY_FILE=<name>.dump`: events go to the dump, the program's
    own output stays on the terminal. A run that fires no events

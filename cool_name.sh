@@ -460,20 +460,43 @@ perf_job() {
     return 0
   }
 
-  # One run first. If the program is quick enough that perf barely saw
-  # it, the distiller says so with exit 3 and we loop the twin from the
-  # outside until there is enough to work with.
-  # Time a bare run first, not the recorded one: perf's own startup is
-  # tens of milliseconds and would size the loop below far too small.
+  # Record the twin looped, not run once. perf attributes percentages by
+  # sampling thousands of times a second, and every program here is
+  # milliseconds long -- the exchange's twin is 20ms, the whole point of
+  # the 11s instrumented run being instrumentation overhead. A single
+  # recording of that yields a handful of samples and the distiller
+  # rightly refuses it, so there is no reason to spend one first.
+  #
+  # Time a bare run to size the loop. Not a recorded one: perf's own
+  # startup is tens of milliseconds and would make the program look far
+  # slower than it is, sizing the loop far too small.
   local start_ms elapsed_ms iters status
   start_ms=$(date +%s%3N)
   "$twin_exe" ${prog_args[@]+"${prog_args[@]}"} >/dev/null 2>&1 || true
   elapsed_ms=$(($(date +%s%3N) - start_ms))
+  # Aim for ~10s of looped wall time. Some of each iteration is process
+  # startup rather than the program's own code, so the useful sample
+  # yield is a fraction of that -- budget generously.
+  [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
+  iters=$((10000 / elapsed_ms + 50))
+  [ "$iters" -gt 200000 ] && iters=200000
 
+  cat >"$perfdir/loop.sh" <<'LOOP'
+#!/bin/sh
+n=$1
+shift
+i=0
+while [ "$i" -lt "$n" ]; do
+  "$@" >/dev/null 2>&1 || true
+  i=$((i + 1))
+done
+LOOP
+  chmod +x "$perfdir/loop.sh"
   perf record -F max -o "$perfdir/perf.data" -- \
-    "$twin_exe" ${prog_args[@]+"${prog_args[@]}"} \
-    >"$perfdir/twin-run.log" 2>&1 || {
-    verdict "no heat profile: perf record failed (see ${perfdir#"$root/"}/twin-run.log)"
+    "$perfdir/loop.sh" "$iters" "$twin_exe" \
+    ${prog_args[@]+"${prog_args[@]}"} \
+    >/dev/null 2>"$perfdir/perf.log" || {
+    verdict "no heat profile: perf record failed (see ${perfdir#"$root/"}/perf.log)"
     return 0
   }
 
@@ -495,45 +518,18 @@ perf_job() {
 
   status=0
   distill || status=$?
-  if [ "$status" -eq 3 ]; then
-    # Aim for ~10s of looped wall time. Most of a tiny program's run is
-    # process startup rather than its own code, so the useful sample
-    # yield per iteration is a fraction of the elapsed time -- budget
-    # generously rather than come back for a third pass.
-    [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
-    iters=$((10000 / elapsed_ms + 50))
-    [ "$iters" -gt 200000 ] && iters=200000
-    cat >"$perfdir/loop.sh" <<'LOOP'
-#!/bin/sh
-n=$1
-shift
-i=0
-while [ "$i" -lt "$n" ]; do
-  "$@" >/dev/null 2>&1 || true
-  i=$((i + 1))
-done
-LOOP
-    chmod +x "$perfdir/loop.sh"
-    if perf record -F max -o "$perfdir/perf.data" -- \
-      "$perfdir/loop.sh" "$iters" "$twin_exe" \
-      ${prog_args[@]+"${prog_args[@]}"} \
-      >/dev/null 2>"$perfdir/perf.log"; then
-      status=0
-      distill || status=$?
-    else
-      verdict "no heat profile: perf record failed (see ${perfdir#"$root/"}/perf.log)"
-      return 0
-    fi
-  fi
 
-  # Still nothing, and a single source file to work with: the program is
-  # short enough that re-execing it only ever samples the runtime coming
-  # up -- caml_init_domains, add_frame_descriptors, the dynamic linker --
-  # and never its own code. The only way to reach that code is to loop
-  # inside one process, which means wrapping the source. That costs the
-  # generality everything above has, so it is the last thing tried and
-  # only where it can work: one file, whose text goes in verbatim under a
-  # line directive so the symbols still point at the real program.
+  # Still nothing, and a single source file to work with. Looping the
+  # twin only helps when a run does more work than starting a process
+  # does; below that line every sample lands in the runtime coming up --
+  # caml_init_domains, add_frame_descriptors, the dynamic linker -- and
+  # none in the program. map_demo is the case: 200,000 runs gave 934k
+  # samples, 207 of them in the twin's own binary, all of them startup.
+  # The only way to reach that code is to loop inside one process, which
+  # means wrapping the source, which is exactly what costs the generality
+  # the pass above has. So it goes second, and only where it can work:
+  # one file, whose text goes in verbatim under a line directive so the
+  # symbols still point at the real program.
   if [ "$status" -eq 3 ] && [ -z "$projroot" ] && [ ! -d "$prog" ]; then
     local loopdir="$perfdir/inproc"
     mkdir -p "$loopdir"
