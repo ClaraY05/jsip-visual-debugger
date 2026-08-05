@@ -160,21 +160,31 @@ both gitignored.
      directory's modules are copied in as they are and enter at `main`.
    The build directory survives between runs so dune stays incremental;
    a change of compiler or switch invalidates it.
+3b. Starts the **perf job** in the background, and it runs for every
+   kind of program including a project built in place. It builds a
+   *twin* — the same program with no `-visual-replay` in it, natively, on
+   `JSIP_HEAT_SWITCH` (default `5.2.0+ox`), into its own `--build-dir` —
+   records it under `perf record -F max`, and pipes
+   `perf report -F sample,sym` through `bin/perf_heat_interface.exe`
+   (`perf_heat/`: demangler, report parser, aggregator) into `heat.sexp`.
+   **Optional throughout**: every failure leaves a line in
+   `_vreplay/<prog>/perf/verdict` and the run carries on without heat.
+
+   Three passes, in order, because no one of them covers everything:
+   one recorded run; then, on exit 3 (fewer than 2000 samples in OCaml
+   code), the twin looped from the *outside* — no source rewriting, so
+   multi-file and foreign projects work; then, only for a single file,
+   the source wrapped in an *in-process* loop. That last one exists
+   because a millisecond program re-exec'd 10,000 times samples nothing
+   but `caml_init_domains` and the dynamic linker — the runtime coming
+   up, never the program. It is last because wrapping source is what
+   costs the generality the other two have.
 4. Runs the resulting `-custom` executable with
    `VREPLAY_FILE=<name>.dump`: events go to the dump, the program's
    own output stays on the terminal. A run that fires no events
-   (nothing tracked) is an error, not an empty replay. `VREPLAY_DUMP_ONLY`
-   stops here.
-4b. Perf heat capture, and **optional throughout** — every failure below
-   reports and carries on, because the debugger works without it. Skipped
-   in project mode: rebuilding somebody else's dune project natively, out
-   from under itself, is not this script's business. Otherwise it wraps
-   the *unchanged* program text in an in-process loop, builds it natively
-   on `JSIP_HEAT_SWITCH` (default `5.2.0+ox`), calibrates to ~3 s of wall
-   time, records with `perf record -F max`, and pipes
-   `perf report -F sample,sym` through `bin/perf_heat_interface.exe`
-   (`perf_heat/`: demangler, report parser, aggregator) into `heat.sexp`.
-   Exit 3 (too few samples) triggers one ×10-iterations retry.
+   (nothing tracked) is an error, not an empty replay.
+4b. Waits for the perf job and prints its verdict. `VREPLAY_DUMP_ONLY`
+   stops here — after the heat, so a dump-only capture still gets one.
 5. Builds the interface and execs the TUI on the dump, with
    `-source-root` at the project root (project mode) or the scratch
    build context (standalone), plus `-perf-file` **only when the

@@ -382,6 +382,201 @@ EOF
   source_root="$builddir/_build/default"
 fi
 
+# --- 3b. the perf job -------------------------------------------------------
+# A heat profile has to come from the program as it really is, so this
+# builds a second copy with no -visual-replay in it, natively, on the
+# ordinary switch, and records that under perf. It is a separate job in
+# every sense: its own build directory, its own toolchain, and its own
+# process, running alongside the instrumented capture rather than after
+# it. The main line waits for it just before opening the TUI and reports
+# whatever it managed.
+#
+# It replaces two limitations. The old stage wrapped the program's own
+# source text in an in-process loop to accumulate samples, which meant it
+# could not touch a project built in place -- so for anything like the
+# exchange the profile had to be recorded by hand. Looping the twin from
+# the outside needs no source rewriting, so a multi-file program and
+# somebody else's dune project work the same way one file does.
+perfdir="$work/perf"
+rm -rf "$perfdir"
+mkdir -p "$perfdir"
+heat="$work/heat.sexp"
+rm -f "$heat"
+heat_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
+
+# The entry module breaks ties in the report between a function of the
+# program's and a same-named library one.
+if [ -n "$projroot" ]; then entry_module="${target^}"; else entry_module="${module^}"; fi
+
+# Everything below runs in the background; it says what happened by
+# leaving a line in $perfdir/verdict, which the main line prints once the
+# instrumented run has had the terminal to itself.
+perf_job() {
+  verdict() { printf '%s\n' "$*" >"$perfdir/verdict"; }
+
+  command -v perf >/dev/null 2>&1 || {
+    verdict "no heat profile: perf is not installed"
+    return 0
+  }
+  opam exec --switch "$heat_switch" -- ocamlopt -version >/dev/null 2>&1 || {
+    verdict "no heat profile: opam switch $heat_switch has no ocamlopt"
+    return 0
+  }
+
+  local twin_exe=""
+  if [ -n "$projroot" ]; then
+    # Its own --build-dir again, so the twin and the instrumented build
+    # never see each other's artifacts and the checkout keeps its own.
+    if opam exec --switch "$heat_switch" -- dune build --root "$projroot" \
+      --build-dir "$perfdir/build" --no-config "$reldir/$target.exe" \
+      >"$perfdir/twin-build.log" 2>&1; then
+      twin_exe="$perfdir/build/default/$reldir/$target.exe"
+    fi
+  else
+    mkdir -p "$perfdir/build"
+    if [ -d "$prog" ]; then
+      cp "$prog"/*.ml "$perfdir/build/"
+      cp "$prog"/*.mli "$perfdir/build/" 2>/dev/null || true
+    else
+      cp "$prog" "$perfdir/build/$module.ml"
+    fi
+    printf '(lang dune 3.0)\n' >"$perfdir/build/dune-project"
+    {
+      printf '(executable\n (name %s)\n (modes native)\n' "$module"
+      # the same libraries the instrumented build got, or the twin will
+      # not compile the moment a program opens Core
+      [ -n "$libs" ] &&
+        printf ' (libraries%s)\n (preprocess (pps ppx_jane))\n' "$libs"
+      printf ')\n'
+    } >"$perfdir/build/dune"
+    if opam exec --switch "$heat_switch" -- dune build \
+      --root "$perfdir/build" --no-config "./$module.exe" \
+      >"$perfdir/twin-build.log" 2>&1; then
+      twin_exe="$perfdir/build/_build/default/$module.exe"
+    fi
+  fi
+  [ -n "$twin_exe" ] || {
+    verdict "no heat profile: the twin's native build failed (see ${perfdir#"$root/"}/twin-build.log)"
+    return 0
+  }
+
+  # One run first. If the program is quick enough that perf barely saw
+  # it, the distiller says so with exit 3 and we loop the twin from the
+  # outside until there is enough to work with.
+  # Time a bare run first, not the recorded one: perf's own startup is
+  # tens of milliseconds and would size the loop below far too small.
+  local start_ms elapsed_ms iters status
+  start_ms=$(date +%s%3N)
+  "$twin_exe" ${prog_args[@]+"${prog_args[@]}"} >/dev/null 2>&1 || true
+  elapsed_ms=$(($(date +%s%3N) - start_ms))
+
+  perf record -F max -o "$perfdir/perf.data" -- \
+    "$twin_exe" ${prog_args[@]+"${prog_args[@]}"} \
+    >"$perfdir/twin-run.log" 2>&1 || {
+    verdict "no heat profile: perf record failed (see ${perfdir#"$root/"}/twin-run.log)"
+    return 0
+  }
+
+  # --root . or dune walks up to whatever workspace encloses this
+  # checkout -- inside a git worktree that is the parent clone, where
+  # this target does not exist.
+  (cd "$root" && dune build --root . bin/perf_heat_interface.exe) \
+    >"$perfdir/distiller-build.log" 2>&1 || {
+    verdict "no heat profile: distiller build failed (see ${perfdir#"$root/"}/distiller-build.log)"
+    return 0
+  }
+
+  distill() {
+    perf report -i "$perfdir/perf.data" --stdio \
+      --dsos "$(basename "$twin_exe")" --percent-limit 0 -F sample,sym \
+      2>/dev/null |
+      "$root/_build/default/bin/perf_heat_interface.exe" "$entry_module" "$heat"
+  }
+
+  status=0
+  distill || status=$?
+  if [ "$status" -eq 3 ]; then
+    # Aim for ~10s of looped wall time. Most of a tiny program's run is
+    # process startup rather than its own code, so the useful sample
+    # yield per iteration is a fraction of the elapsed time -- budget
+    # generously rather than come back for a third pass.
+    [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
+    iters=$((10000 / elapsed_ms + 50))
+    [ "$iters" -gt 200000 ] && iters=200000
+    cat >"$perfdir/loop.sh" <<'LOOP'
+#!/bin/sh
+n=$1
+shift
+i=0
+while [ "$i" -lt "$n" ]; do
+  "$@" >/dev/null 2>&1 || true
+  i=$((i + 1))
+done
+LOOP
+    chmod +x "$perfdir/loop.sh"
+    if perf record -F max -o "$perfdir/perf.data" -- \
+      "$perfdir/loop.sh" "$iters" "$twin_exe" \
+      ${prog_args[@]+"${prog_args[@]}"} \
+      >/dev/null 2>"$perfdir/perf.log"; then
+      status=0
+      distill || status=$?
+    else
+      verdict "no heat profile: perf record failed (see ${perfdir#"$root/"}/perf.log)"
+      return 0
+    fi
+  fi
+
+  # Still nothing, and a single source file to work with: the program is
+  # short enough that re-execing it only ever samples the runtime coming
+  # up -- caml_init_domains, add_frame_descriptors, the dynamic linker --
+  # and never its own code. The only way to reach that code is to loop
+  # inside one process, which means wrapping the source. That costs the
+  # generality everything above has, so it is the last thing tried and
+  # only where it can work: one file, whose text goes in verbatim under a
+  # line directive so the symbols still point at the real program.
+  if [ "$status" -eq 3 ] && [ -z "$projroot" ] && [ ! -d "$prog" ]; then
+    local loopdir="$perfdir/inproc"
+    mkdir -p "$loopdir"
+    {
+      printf 'let () =\n'
+      printf '  let n = int_of_string (Sys.getenv "JSIP_HEAT_ITERS") in\n'
+      printf '  for _ = 1 to n do\n'
+      printf '    let module _ = struct\n'
+      printf '# 1 "%s.ml"\n' "$module"
+      cat "$prog"
+      printf '    end in ()\n'
+      printf '  done\n'
+    } >"$loopdir/$module.ml"
+    printf '(lang dune 3.0)\n' >"$loopdir/dune-project"
+    {
+      printf '(executable\n (name %s)\n (modes native)\n' "$module"
+      [ -n "$libs" ] &&
+        printf ' (libraries%s)\n (preprocess (pps ppx_jane))\n' "$libs"
+      printf ')\n'
+    } >"$loopdir/dune"
+    if opam exec --switch "$heat_switch" -- dune build --root "$loopdir" \
+      --no-config "./$module.exe" >"$perfdir/inproc-build.log" 2>&1; then
+      twin_exe="$loopdir/_build/default/$module.exe"
+      if perf record -F max -o "$perfdir/perf.data" -- \
+        env JSIP_HEAT_ITERS=200000 "$twin_exe" \
+        >/dev/null 2>"$perfdir/perf.log"; then
+        status=0
+        distill || status=$?
+      fi
+    fi
+  fi
+
+  case "$status" in
+  0) verdict "heat profile: ${heat#"$root/"} (recorded from the uninstrumented twin)" ;;
+  3) verdict "no heat profile: the program's own code never accumulated enough samples -- too little of it runs to measure" ;;
+  *) verdict "no heat profile: the distiller exited $status" ;;
+  esac
+}
+
+say "perf job started (uninstrumented twin, native, switch $heat_switch)"
+perf_job >"$perfdir/job.log" 2>&1 &
+perf_job_pid=$!
+
 # --- 4. run it, dump going to its own sink ----------------------------------
 # The instrumentation picks its sink from VREPLAY_FILE, so the dump never
 # mixes with the program's own output, which stays on the terminal.
@@ -398,10 +593,15 @@ whose type this program declares. An event rooted at a MUTATION needs a \
 named identifier: Hashtbl.add tbl ... is recorded, Hashtbl.add t.field \
 ... is not"
 say "dump captured: ${dump#"$root/"} ($(grep -c '(event ' "$dump") events)"
-# named here rather than in 4b because the dump-only hint below needs it:
-# stopping at the dump also stops before the stage that writes it, so what
-# is there is a profile recorded by hand (the README's long-running recipe).
-heat="$work/heat.sexp"
+
+# --- 4b. the perf job reports back ------------------------------------------
+wait "$perf_job_pid" 2>/dev/null || true
+if [ -f "$perfdir/verdict" ]; then
+  say "$(cat "$perfdir/verdict")"
+else
+  say "no heat profile: the perf job died (see ${perfdir#"$root/"}/job.log)"
+fi
+
 if [ -n "${VREPLAY_DUMP_ONLY:-}" ]; then
   say "VREPLAY_DUMP_ONLY set; stopping before the TUI. Replay it with:"
   say "  (cd $interface && dune build --root . app/bin/main.exe)"
@@ -411,124 +611,8 @@ if [ -n "${VREPLAY_DUMP_ONLY:-}" ]; then
     say "    -perf-file $heat"
   else
     say "    -dump-file $dump -source-root $source_root"
-    say "(no ${heat#"$root/"}: the heat stage runs after this exit. To color \
-the call stack, record the program natively under perf and distill it -- see \
-Capturing a long-running program in the README -- then add -perf-file)"
   fi
   exit 0
-fi
-
-# --- 4b. perf heat capture (optional) ---------------------------------------
-# Samples the *unchanged* program -- its text is byte-identical; only the
-# generated harness around it loops it in-process, so a microsecond-scale
-# program accumulates enough samples -- natively compiled with the opam
-# switch's ocamlopt, then distills the report into the per-function
-# profile (heat.sexp) the interface colors its call stack with. Skipped
-# with a warning when perf or the native switch is missing: heat is
-# optional, the debugger runs without it.
-#
-# Only for programs we own the sources of. A project built in place is
-# somebody else's dune project with its own libraries and ppx; rebuilding
-# it natively out from under itself is not this script's business.
-rm -f "$heat"
-heat_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
-# The wrapped entry module: a single file keeps its own basename (so
-# symbol module paths match the real program); a directory enters at
-# main.ml. Only the entry is looped -- dependency modules are definitions
-# and evaluate once.
-if [ -d "$prog" ]; then wrap_name="main"; else wrap_name="$name"; fi
-module_name="${wrap_name^}"
-
-if [ -n "$projroot" ]; then
-  say "project mode; skipping heat capture (its sources are not ours to rebuild)"
-elif ! command -v perf >/dev/null 2>&1; then
-  say "perf not found; skipping heat capture"
-elif ! opam exec --switch "$heat_switch" -- ocamlopt -version \
-  >/dev/null 2>&1; then
-  say "opam switch $heat_switch has no ocamlopt; skipping heat capture"
-else
-  say "capturing perf heat profile (native build, looped in-process)"
-  perfdir="$work/perf"
-  rm -rf "$perfdir"
-  mkdir -p "$perfdir/build"
-  if [ -d "$prog" ]; then
-    for src in "$prog"/*.ml; do
-      [ "$(basename "$src")" = "main.ml" ] || cp "$src" "$perfdir/build/"
-    done
-    cp "$prog"/*.mli "$perfdir/build/" 2>/dev/null || true
-  fi
-  wrapped="$perfdir/build/$wrap_name.ml"
-  {
-    printf 'let () =\n'
-    printf '  let n = int_of_string (Sys.getenv "JSIP_HEAT_ITERS") in\n'
-    printf '  for _ = 1 to n do\n'
-    printf '    let module _ = struct\n'
-    printf '# 1 "%s.ml"\n' "$wrap_name"
-    cat "$main_src"
-    printf '    end in ()\n'
-    printf '  done\n'
-  } >"$wrapped"
-  # a scratch dune project, so multi-file programs get their modules
-  # compiled in dependency order without us sorting them
-  cat >"$perfdir/build/dune-project" <<'EOF'
-(lang dune 3.0)
-EOF
-  cat >"$perfdir/build/dune" <<EOF
-(executable
- (name $wrap_name)
- (modes native))
-EOF
-  if ! opam exec --switch "$heat_switch" -- dune build \
-    --root "$perfdir/build" --no-config "./$wrap_name.exe" \
-    >"$perfdir/build.log" 2>&1; then
-    say "native build for perf failed (see ${perfdir#"$root/"}/build.log); skipping heat capture"
-  else
-    heat_exe="$perfdir/build/_build/default/$wrap_name.exe"
-    # aim for ~3s of looped wall time so `perf record -F max` collects
-    # a few hundred thousand samples whatever the program's size
-    calib_iters=10000
-    start_ms=$(date +%s%3N)
-    JSIP_HEAT_ITERS=$calib_iters "$heat_exe" >/dev/null 2>&1 || true
-    elapsed_ms=$(($(date +%s%3N) - start_ms))
-    [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
-    iters=$((calib_iters * 3000 / elapsed_ms))
-    [ "$iters" -lt 10000 ] && iters=10000
-    [ "$iters" -gt 50000000 ] && iters=50000000
-    # --root . or dune walks up to whatever workspace encloses this
-    # checkout -- inside a git worktree that is the parent clone, where
-    # this target does not exist. And heat is optional by design, so a
-    # failure here reports and moves on rather than taking the run down.
-    if ! (cd "$root" && dune build --root . bin/perf_heat_interface.exe) \
-      >"$perfdir/interface-build.log" 2>&1; then
-      say "perf_heat_interface build failed (see ${perfdir#"$root/"}/interface-build.log); continuing without heat"
-      heat_ok=false
-    fi
-    for attempt in 1 2; do
-      [ "${heat_ok:-true}" = false ] && break
-      if ! perf record -F max -o "$perfdir/perf.data" -- \
-        env JSIP_HEAT_ITERS="$iters" "$heat_exe" \
-        >/dev/null 2>"$perfdir/perf.log"; then
-        say "perf record failed (see ${perfdir#"$root/"}/perf.log); skipping heat capture"
-        break
-      fi
-      status=0
-      perf report -i "$perfdir/perf.data" --stdio --dsos "$wrap_name.exe" \
-        --percent-limit 0 -F sample,sym 2>/dev/null |
-        "$root/_build/default/bin/perf_heat_interface.exe" "$module_name" "$heat" ||
-        status=$?
-      if [ "$status" -eq 0 ]; then
-        say "heat profile: ${heat#"$root/"}"
-        break
-      elif [ "$status" -eq 3 ] && [ "$attempt" -eq 1 ]; then
-        iters=$((iters * 10))
-        [ "$iters" -gt 50000000 ] && iters=50000000
-        say "too few samples; retrying with $iters iterations"
-      else
-        say "heat capture failed (status $status); continuing without heat"
-        break
-      fi
-    done
-  fi
 fi
 
 # --- 5. hand the dump to the interface --------------------------------------

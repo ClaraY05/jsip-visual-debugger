@@ -43,12 +43,10 @@ VREPLAY_DUMP_ONLY=1 ./cool_name.sh \
 sed -i '${/^[{}]*$/d}' _vreplay/main/main.dump    # drop the torn final marker line
 ```
 
-Then the heat profile, by hand — `VREPLAY_DUMP_ONLY` exits before the
-pipeline's perf stage, and that stage would be no use here anyway: it
-loops the program in-process to accumulate samples, and a program that
-runs until you interrupt it never comes back from the first iteration.
-Profile the real thing instead — the same scenario, natively built and
-uninstrumented, recorded for about as long as the capture ran:
+The heat profile comes with it — the perf job runs for any program,
+project mode included, and `VREPLAY_DUMP_ONLY` waits for it before
+exiting. Only a program you interrupt needs doing by hand, since the job
+records a run that ends on its own:
 
 ```sh
 (cd ../test/jsip-exchange && dune build app/scenario_runner/bin/main.exe)
@@ -96,15 +94,17 @@ build against the toolchain's library versions — see the
 `vreplay-compat` branch in the exchange repo for the (small, mechanical)
 compatibility pass.
 
-For programs whose sources are ours — a loose file or a directory, not
-someone else's dune project — it also captures a **perf heat profile**:
-the unchanged program text, compiled natively and looped in-process,
-sampled with `perf`, distilled into `heat.sexp` for the interface to
-colour its call stack with, and passed on `-perf-file` when it launches
-the TUI. Optional throughout; it says so and carries on when `perf`, the
-native switch or the interface's `-perf-file` flag is missing — and it
-is skipped entirely under `VREPLAY_DUMP_ONLY`, which stops the run
-before that stage.
+Alongside all that it runs a **perf job**, in the background, for every
+kind of program including a project built in place. The job builds a
+second copy of the program with no instrumentation in it, natively, on
+the ordinary switch, records that under `perf`, and distils the report
+into `heat.sexp` — the per-function profile the interface colours its
+call stack with, passed on `-perf-file` when the TUI opens. The main
+line waits for it after the capture and prints what it managed.
+
+Optional throughout: it says so and carries on when `perf`, the native
+switch or the interface's `-perf-file` flag is missing, and a program
+with too little of its own code to sample simply gets no profile.
 
 What gets recorded: calls involving a container the compiler knows —
 the stdlib's `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and
