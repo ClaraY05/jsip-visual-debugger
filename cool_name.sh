@@ -398,10 +398,23 @@ whose type this program declares. An event rooted at a MUTATION needs a \
 named identifier: Hashtbl.add tbl ... is recorded, Hashtbl.add t.field \
 ... is not"
 say "dump captured: ${dump#"$root/"} ($(grep -c '(event ' "$dump") events)"
+# named here rather than in 4b because the dump-only hint below needs it:
+# stopping at the dump also stops before the stage that writes it, so what
+# is there is a profile recorded by hand (the README's long-running recipe).
+heat="$work/heat.sexp"
 if [ -n "${VREPLAY_DUMP_ONLY:-}" ]; then
   say "VREPLAY_DUMP_ONLY set; stopping before the TUI. Replay it with:"
+  say "  (cd $interface && dune build --root . app/bin/main.exe)"
   say "  $interface/_build/default/app/bin/main.exe \\"
-  say "    -dump-file $dump -source-root $source_root"
+  if [ -f "$heat" ]; then
+    say "    -dump-file $dump -source-root $source_root \\"
+    say "    -perf-file $heat"
+  else
+    say "    -dump-file $dump -source-root $source_root"
+    say "(no ${heat#"$root/"}: the heat stage runs after this exit. To color \
+the call stack, record the program natively under perf and distill it -- see \
+Capturing a long-running program in the README -- then add -perf-file)"
+  fi
   exit 0
 fi
 
@@ -417,7 +430,6 @@ fi
 # Only for programs we own the sources of. A project built in place is
 # somebody else's dune project with its own libraries and ppx; rebuilding
 # it natively out from under itself is not this script's business.
-heat="$work/heat.sexp"
 rm -f "$heat"
 heat_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
 # The wrapped entry module: a single file keeps its own basename (so
