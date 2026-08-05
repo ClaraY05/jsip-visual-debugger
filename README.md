@@ -41,11 +41,50 @@ VREPLAY_DUMP_ONLY=1 ./cool_name.sh \
 # let the market run 15–30 seconds, then Ctrl-C
 
 sed -i '${/^[{}]*$/d}' _vreplay/main/main.dump    # drop the torn final marker line
+```
+
+Then the heat profile, by hand — `VREPLAY_DUMP_ONLY` exits before the
+pipeline's perf stage, and that stage would be no use here anyway: it
+loops the program in-process to accumulate samples, and a program that
+runs until you interrupt it never comes back from the first iteration.
+Profile the real thing instead — the same scenario, natively built and
+uninstrumented, recorded for about as long as the capture ran:
+
+```sh
+(cd ../test/jsip-exchange && dune build app/scenario_runner/bin/main.exe)
+
+perf record -F max -o /tmp/scenario.perf.data -- \
+  ../test/jsip-exchange/_build/default/app/scenario_runner/bin/main.exe \
+  -scenario book-filler -seed 0     # same 15–30 seconds, then Ctrl-C
+
+perf report -i /tmp/scenario.perf.data --stdio --dsos main.exe \
+  --percent-limit 0 -F sample,sym |
+  dune exec bin/perf_heat_interface.exe -- Main _vreplay/main/heat.sexp
+```
+
+Record without `-g`: the distiller reads the flat report, and a
+callchain one is mostly lines it cannot parse. `Main` is the profiled
+program's entry module, which breaks ties between a function of yours
+and a same-named library one. It exits 3 if fewer than 2000 samples
+landed in OCaml code — record for longer.
+
+Now replay, with `-perf-file` for the heat and the interface built by
+hand (stopping at the dump also stops before the step that builds it):
+
+```sh
+(cd jsip-debugger-interface && dune build --root . app/bin/main.exe)
 
 jsip-debugger-interface/_build/default/app/bin/main.exe \
   -dump-file _vreplay/main/main.dump \
-  -source-root _vreplay/main/build/default
+  -source-root _vreplay/main/build/default \
+  -perf-file _vreplay/main/heat.sexp
 ```
+
+The heat colors each callee's name in the call stack by its share of
+sampled compute. It matches by function name and module, so it is a
+different run's statistics laid over this run's calls, and a callee the
+optimizer inlined away — `Hashtbl.incr`, `Order_queue.enqueue_back_exn`
+— has no symbol to match and stays uncolored.
 
 Interrupting mid-event tears the dump's last line, which the reader
 rejects — the `sed` deletes it. Load time scales with the capture (a
@@ -61,9 +100,11 @@ For programs whose sources are ours — a loose file or a directory, not
 someone else's dune project — it also captures a **perf heat profile**:
 the unchanged program text, compiled natively and looped in-process,
 sampled with `perf`, distilled into `heat.sexp` for the interface to
-colour its call stack with. Optional throughout; it says so and carries
-on when `perf`, the native switch or the interface's `-perf-file` flag
-is missing.
+colour its call stack with, and passed on `-perf-file` when it launches
+the TUI. Optional throughout; it says so and carries on when `perf`, the
+native switch or the interface's `-perf-file` flag is missing — and it
+is skipped entirely under `VREPLAY_DUMP_ONLY`, which stops the run
+before that stage.
 
 What gets recorded: calls involving a container the compiler knows —
 the stdlib's `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray` and
