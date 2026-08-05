@@ -47,12 +47,12 @@ after a four-minute build of the wrong compiler.
 
 ### jsip-debugger-compiler
 
-Fork of `ocaml/ocaml` trunk (5.6.0+dev0) at
+Fork of `ocaml/ocaml` at
 <https://github.com/ClaraY05/jsip-debugger-compiler>, pinned to
-`vreplay-main` — the fork's integration branch, with the
-`fix/walker-correctness` emit-sink and walker fixes merged in
-(`c/snapshot` and `c/vreplay-registry-dynarray` are earlier phases).
-What the fork adds:
+`vreplay-main` — the fork's integration branch. It sits on an **OCaml 5.5
+base** (`VERSION` 5.5.1+dev0, upstream commit `466e585663`): the fork
+point was 5.6.0+dev and the branch was replayed onto 5.5, so its `trunk`
+is only history and diffs against it are meaningless. What the fork adds:
 
 - `Clflags.visual_replay` (the `-visual-replay` flag) gates everything.
 - `typing/vreplay_instrumentation.ml{,i}` rewrites the typedtree,
@@ -69,15 +69,26 @@ What the fork adds:
   sink, chosen at first emit: `VREPLAY_SOCK=<path>` (Unix stream
   socket, falls through to the file sink if the connect fails),
   `VREPLAY_FILE=<path>`, else `./vreplay.dump`. Never stdout.
-  Instrumented bytecode must run under the fork's own `ocamlrun`.
+  Instrumented bytecode must run under the fork's own `ocamlrun` — the
+  coupling the toolchain assembly below exists to satisfy.
+  Draft PR #20 in the compiler repo moves these stubs into the vreplay
+  library, which would let instrumented programs run under any
+  ABI-compatible runtime; if it lands, step 2 of the pipeline gets
+  simpler, not different.
 - `testing/` — golden-dump cases and `run_tests.sh`: compiles and runs
   each case, validates every dump line parses and depth balances, and
   diffs against `expected/` up to a consistent address bijection
   (`--promote` regenerates). The interface vendors these goldens
   verbatim as its fixtures.
 
-Build facts (cool_name automates all of this): bytecode only — `make
-world`, never `world.opt`; native has never built on these branches.
+Build facts (cool_name automates all of this): **the pipeline builds
+bytecode** — `make world`, never `world.opt`. That is now a choice rather
+than a limit: the fork grew native `-visual-replay` support (a follow-up
+`make opt` gives `ocamlopt` and `vreplay.cmxa`, and its golden suite then
+runs every case under both backends). The pipeline has not been moved
+onto it, so everything below — the `-custom` executables, the shimmed
+`ocamlc`, and especially the ocamlopt-free `PATH` mirror — still assumes
+a bytecode-only tree, and would need revisiting together.
 The team layout configures with `--prefix=$PWD/_install`, and
 bytecode-only `make install` is expected to abort at
 `tools/ocamldep.opt` — after everything that matters is already
@@ -97,11 +108,14 @@ mode (everything collapses but the structure you are on), `/` to filter
 structures by name, kind or type — it owns up to the cut with
 `/order · 42 of 1223 live` — node counts on the headers, `h` to collapse
 whatever the cursor points at, and `[`/`]` to pan by hand. Layout:
-`lib/types` (calls, locations, snapshots, the call stack), `lib/parsing`
-(dump reader and source loader), `lib/replay` (the per-step replay
-model), `lib/tui` (panes, theme, app), and `app/bin/main.exe`, run as
-`main.exe -dump-file FILE [-source-root DIR]`. `testing/` vendors the
-compiler's golden dumps verbatim, and the expect tests run on them.
+`lib/types` (calls, locations, snapshots, the call stack, the heat
+profile), `lib/parsing` (readers for the dump, the sources and the heat
+profile), `lib/replay` (the per-step replay model), `app/tui`
+(`components/` for the panes and theme, `src/` for the app — it moved out
+of `lib/` on 2026-08-04), and `app/bin/main.exe`, run as
+`main.exe -dump-file FILE [-source-root DIR] [-perf-file heat.sexp]`.
+`testing/` vendors the compiler's golden dumps verbatim, and the expect
+tests run on them.
 Builds and tests clean on the OxCaml switch with plain `dune build` /
 `dune runtest`. It has its own `CLAUDE.md` (same conventions as this
 file) and repo-scoped skills (`bonsai-web`, `frontend-design`,
