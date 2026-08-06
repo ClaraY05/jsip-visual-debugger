@@ -94,11 +94,48 @@ mkdir -p "$work"
 prefix="$compiler/_install"
 ocamlrun="$prefix/bin/ocamlrun"
 
+# Where the fork keeps its vreplay library and its golden-dump tests. The
+# fork's PR #23 moved the library under vreplay/src and the tests from
+# testing/ to vreplay/tests; earlier revs have them at vreplay/ and
+# testing/. Probe a tracked SOURCE file, never a build product: checking
+# out across that move leaves the pre-move .cma, .cmi and .a behind at
+# vreplay/ as untracked litter, so a probe on artifacts reads the old
+# layout as current and hands the toolchain a library from whichever rev
+# was built last.
+if [ -f "$compiler/vreplay/src/vreplay.ml" ]; then
+  vreplay_lib="$compiler/vreplay/src"
+  vreplay_tests="vreplay/tests/run_tests.sh"
+else
+  vreplay_lib="$compiler/vreplay"
+  vreplay_tests="testing/run_tests.sh"
+fi
+
 want_rev="$(git -C "$compiler" rev-parse HEAD)"
 built_rev="$(cat "$prefix/.built-rev" 2>/dev/null || true)"
 
-if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/vreplay.cma" ]; then
-  say "building the forked compiler at ${want_rev:0:12} (~10 min from scratch)"
+if [ "$built_rev" != "$want_rev" ] || ! [ -f "$vreplay_lib/vreplay.cma" ]; then
+  say "building the forked compiler at ${want_rev:0:12} (~4 min from scratch)"
+  # A rev bump is not safely incremental here, so start from a clean
+  # tree. make compares mtimes of prerequisites that still EXIST, which
+  # means a source REMOVED from a list leaves everything generated from
+  # that list stale forever. The fork moved caml_wire_emit and
+  # caml_wire_traverse out of the runtime into the vreplay C stubs, and a
+  # tree that crosses that move regenerates neither runtime/primitives
+  # nor runtime/prims.c: linking runtime/ocamlrun then dies on two
+  # undefined references, and every bytecode tool already linked against
+  # the old primitive table dies with "unknown C primitive". Nothing
+  # short of a clean build makes .built-rev mean what it says.
+  (cd "$compiler" && [ -f Makefile.config ] && make distclean) >/dev/null 2>&1 ||
+    true
+  # The previous rev's install prefix has to go too, and distclean does
+  # not know about it. -visual-replay resolves +vreplay against the
+  # CONFIGURED stdlib -- _install/lib/ocaml -- ahead of run_tests.sh's -I
+  # on the source dir, so a stale installed vreplay.cmi shadows the
+  # freshly built one during the validation run. Harmless while the
+  # snapshot signature holds still; the moment a rev changes it,
+  # map_basic dies on a phantom arity error ("applied to too many
+  # arguments").
+  rm -rf "$prefix"
   # `make install` is expected to die partway: on a bytecode-only tree it
   # aborts at tools/ocamldep.opt, after everything we need (runtime,
   # stdlib, byte binaries) is already in place. Tolerate it, hand-finish
@@ -106,7 +143,7 @@ if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/vreplay.cma" ]; 
   (cd "$compiler" &&
     { [ -f Makefile.config ] || ./configure -C --prefix "$compiler/_install"; } &&
     make -j"$(nproc)" world &&
-    testing/run_tests.sh map_basic &&
+    "$vreplay_tests" map_basic &&
     { make install || true; } &&
     ln -sf ocamlc.byte _install/bin/ocamlc &&
     ln -sf ocamldep.byte _install/bin/ocamldep &&
@@ -176,7 +213,16 @@ if [ "$(cat "$tc/.stamp" 2>/dev/null || true)" != "$tc_want" ]; then
   cp -p "$compiler"/runtime/libcamlrun*.a "$ocamllib/"
   cp -p "$compiler"/runtime/libcamlrun*.so "$ocamllib/" 2>/dev/null || true
   mkdir -p "$ocamllib/vreplay"
-  cp -p "$compiler"/vreplay/*.cmi "$compiler"/vreplay/*.cma "$ocamllib/vreplay/"
+  cp -p "$vreplay_lib"/*.cmi "$vreplay_lib"/*.cma "$ocamllib/vreplay/"
+  # The C walker moved out of libcamlrun into its own stubs archive
+  # (snapshot.c -> libvreplaybyt). vreplay.cma records -cclib
+  # -lvreplaybyt, which a -custom link resolves against the load path, so
+  # the archive has to sit beside the cma; the dll is the non-custom
+  # equivalent and lives with the other stub dlls. Older revs have
+  # neither file -- their walker still rides in the libcamlrun overlay
+  # copied just above -- hence the tolerated misses.
+  cp -p "$vreplay_lib"/lib*.a "$ocamllib/vreplay/" 2>/dev/null || true
+  cp -p "$vreplay_lib"/dll*.so "$ocamllib/stublibs/" 2>/dev/null || true
 
   # Config probes have to answer for the compiler dune is about to drive,
   # and must not carry -visual-replay -- it is not a config query, and

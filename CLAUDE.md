@@ -152,12 +152,29 @@ container it is in; 189 events, six `ds_type`s). Artifacts go under
 both gitignored.
 
 1. Builds the forked compiler whenever the pinned submodule commit
-   changes (stamped in `_install/.built-rev`): configure to
-   `_install`, bytecode `make world`, one of the fork's golden-dump
-   cases as validation, the tolerated partial install, hand-finished
-   `ocamlc`/`ocamldep` symlinks. 3½–4¼ min from scratch on 4 cores (two
-   measured builds: 3 min 35 s and 4 min 16 s, 464 `.cmo`s each with
-   nothing reused); log at `_vreplay/compiler-build.log`.
+   changes (stamped in `_install/.built-rev`): `make distclean`,
+   configure to `_install`, bytecode `make world`, one of the fork's
+   golden-dump cases as validation, the tolerated partial install,
+   hand-finished `ocamlc`/`ocamldep` symlinks. 3½–4¼ min from scratch on
+   4 cores (two measured builds: 3 min 35 s and 4 min 16 s, 464 `.cmo`s
+   each with nothing reused); log at `_vreplay/compiler-build.log`.
+
+   That rebuild is deliberately from scratch rather than incremental.
+   make only compares the mtimes of prerequisites that still *exist*, so
+   a source dropped from a list leaves everything generated from that
+   list stale for good. When the fork moved `caml_wire_emit` and
+   `caml_wire_traverse` out of the runtime into the vreplay C stubs, a
+   carried-over `runtime/primitives` broke the `ocamlrun` link on two
+   undefined references, and the bytecode tools already linked against
+   the old primitive table died with `unknown C primitive`. Nothing
+   cheaper makes `.built-rev` mean what it says.
+
+   Where the fork keeps vreplay is probed from a tracked *source* file
+   (`vreplay/src/vreplay.ml`), never from a build product: the fork's
+   PR #23 moved the library to `vreplay/src` and the tests to
+   `vreplay/tests`, and checking out across that move leaves the pre-move
+   `.cma`, `.cmi` and `.a` sitting at `vreplay/` as untracked litter that
+   an artifact probe would read as the current layout.
 2. Assembles a toolchain — see below — pairing the fork's compiler with
    an opam switch's libraries.
 3. Compiles with `-visual-replay`, in one of two modes:
