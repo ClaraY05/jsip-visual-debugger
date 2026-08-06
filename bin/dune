@@ -1,13 +1,5 @@
 (executable
- (name main)
- (modules main)
- (libraries sandbox_hello core)
- (preprocess
-  (pps ppx_jane)))
-
-(executable
  (name perf_heat_interface)
- (modules perf_heat_interface)
- (libraries sandbox_perf_heat core)
+ (libraries canary_perf_heat core)
  (preprocess
   (pps ppx_jane)))

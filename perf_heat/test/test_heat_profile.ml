@@ -1,5 +1,5 @@
 open! Core
-open Sandbox_perf_heat
+open Canary_perf_heat
 
 let report =
   {|

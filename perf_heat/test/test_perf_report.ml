@@ -1,5 +1,5 @@
 open! Core
-open Sandbox_perf_heat
+open Canary_perf_heat
 
 (* verbatim excerpt (headers, blanks, tail comment included) of
    [perf report --stdio --dsos prog.exe --percent-limit 0 -F sample,sym] over

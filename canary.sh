@@ -1,58 +1,41 @@
 #!/usr/bin/env bash
 # The outer shell of the visual replay debugger.
 #
-#   ./cool_name.sh path/to/program.ml [args...]
+#   ./canary.sh path/to/program.ml [args...]
 #
-# Pipeline:
-#   1. build the forked compiler if needed (bytecode world; redone
-#      whenever the pinned submodule commit changes)
-#   2. assemble a toolchain -- the fork's compiler over an opam switch's
-#      libraries -- so instrumented programs can link Core and Async
-#   3. compile the program with -visual-replay through dune
-#   4. run the instrumented binary -- replay events go to the dump file
-#      via VREPLAY_FILE, the program's own output to the terminal
-#   5. build the interface and replace this process with the TUI,
-#      replaying the dump
+# Pipeline: 1. build the forked compiler if the pinned commit changed;
+# 2. assemble a toolchain (the fork's compiler over an opam switch's
+# libraries); 3. compile with -visual-replay -- in place if the file is
+# already a dune target, else wrapped in a scratch project -- while 3b
+# profiles an uninstrumented twin in the background; 4. run it, events
+# going to the dump; 5. exec the TUI on the dump.
 #
-# Step 3 has two modes, chosen by looking at where the file lives:
-#
-#   project     the file already is a dune target (there is a `dune`
-#               beside it), so it is built where it stands and keeps its
-#               own libraries, ppx and dependencies.  This is how a whole
-#               project -- jsip-exchange, say -- comes in.
-#   standalone  a loose .ml file, wrapped in a scratch dune project.
-#
-# Artifacts land in _vreplay/<program-name>/ (gitignored); the toolchain
-# is shared across programs in _vreplay/.toolchain/.
-#
-# Knobs: VREPLAY_SWITCH picks the library switch (default jsip-vreplay),
-# VREPLAY_TARGET names the executable when a dune file declares several,
-# VREPLAY_DUMP_ONLY stops after step 4 with the dump on disk.
+# Artifacts: _vreplay/<program-name>/; shared toolchain:
+# _vreplay/.toolchain/. Knobs: VREPLAY_SWITCH (library switch, default
+# jsip-vreplay), VREPLAY_TARGET (executable when a dune file declares
+# several), VREPLAY_DUMP_ONLY (stop once the dump is on disk),
+# COMPILER_DIR / INTERFACE_DIR (override the submodule checkouts).
 set -euo pipefail
 
-# COMPILER_DIR / INTERFACE_DIR override the submodule checkouts, e.g. to
-# run against standalone clones that are ahead of the pinned commits.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 compiler="${COMPILER_DIR:-$root/jsip-debugger-compiler}"
 interface="${INTERFACE_DIR:-$root/jsip-debugger-interface}"
 
-say() { printf 'cool_name: %s\n' "$*"; }
+say() { printf 'canary: %s\n' "$*"; }
 die() {
-  printf 'cool_name: error: %s\n' "$*" >&2
+  printf 'canary: error: %s\n' "$*" >&2
   exit 1
 }
 
 [ $# -ge 1 ] ||
-  die "usage: ./cool_name.sh path/to/program.ml [args...]
-             ./cool_name.sh path/to/program-dir [args...]
-             ./cool_name.sh path/to/target.exe [args...]"
+  die "usage: ./canary.sh path/to/program.ml [args...]
+             ./canary.sh path/to/program-dir [args...]
+             ./canary.sh path/to/target.exe [args...]"
 prog="${1%/}"
 shift
 prog_args=("$@")
-# Three shapes. A loose .ml is wrapped in a scratch project; a directory
-# is the same but multi-file, its entry point main.ml and the rest
-# ordinary dependency modules dune sorts out; a .exe names a dune target
-# outright, which is what a project that already has a `dune` wants.
+# A loose .ml is wrapped in a scratch project; a directory is the same
+# but multi-file, entering at main.ml; a .exe names a dune target.
 if [ -d "$prog" ]; then
   [ -f "$prog/main.ml" ] ||
     die "a multi-file program needs a main.ml: $prog"
@@ -85,28 +68,28 @@ dump="$work/$name.dump"
 mkdir -p "$work"
 
 # --- 1. the forked compiler -------------------------------------------------
-# Bytecode only: native has never built on the vreplay branches, so it's
-# `make world`, not `world.opt`. The fork is configured and installed to
-# its own _install prefix -- the layout the fork's team uses -- so that
-# tools (dune especially) see an installed-shaped lib dir. The build is
-# validated with one of the fork's own golden-dump tests, and redone
-# whenever the pinned submodule commit changes (the .built-rev stamp).
+# Bytecode `make world` (the fork has native support now; the pipeline
+# has not moved onto it), installed to its own _install prefix so tools
+# see an installed-shaped lib dir, validated with one golden-dump test,
+# and redone when the pinned commit changes (the .built-rev stamp).
 prefix="$compiler/_install"
 ocamlrun="$prefix/bin/ocamlrun"
 
 want_rev="$(git -C "$compiler" rev-parse HEAD)"
 built_rev="$(cat "$prefix/.built-rev" 2>/dev/null || true)"
 
-if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/vreplay.cma" ]; then
+if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/src/vreplay.cma" ]; then
   say "building the forked compiler at ${want_rev:0:12} (~10 min from scratch)"
-  # `make install` is expected to die partway: on a bytecode-only tree it
-  # aborts at tools/ocamldep.opt, after everything we need (runtime,
-  # stdlib, byte binaries) is already in place. Tolerate it, hand-finish
-  # the names it never got to, and verify the pieces that matter.
+  # `make install` aborts at tools/ocamldep.opt on a bytecode-only tree,
+  # after everything we need is in place: tolerate it and hand-finish.
+  # The old _install goes first: the golden test runs before install,
+  # and +vreplay resolves into _install, where a previous rev's
+  # vreplay.cmi would shadow the freshly built library.
   (cd "$compiler" &&
+    rm -rf _install &&
     { [ -f Makefile.config ] || ./configure -C --prefix "$compiler/_install"; } &&
     make -j"$(nproc)" world &&
-    testing/run_tests.sh map_basic &&
+    vreplay/tests/run_tests.sh map_basic &&
     { make install || true; } &&
     ln -sf ocamlc.byte _install/bin/ocamlc &&
     ln -sf ocamldep.byte _install/bin/ocamldep &&
@@ -120,40 +103,25 @@ if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/vreplay.cma" ]; 
 fi
 
 # --- 2. the toolchain -------------------------------------------------------
-# A compiler can only read .cmi files written by its own exact version, in
-# either direction -- there is no forward compatibility to lean on. The
-# fork stamps Caml1999I037, the OxCaml switch this repo is otherwise built
-# with stamps Caml1999I578, and neither reads the other. So linking Core
-# into an instrumented program means a switch whose Core was compiled BY
-# the fork's version. That is $switch.
+# A compiler reads only .cmi files written by its own exact version (the
+# fork stamps Caml1999I037, the OxCaml switch Caml1999I578), so linking
+# Core needs a switch whose libraries were compiled BY the fork's
+# version: $switch. Its ocamlc and libcamlrun are older, so take only
+# its libraries and splice the fork's compiler and runtime over the top:
 #
-# Its own ocamlc is older than the pinned submodule (no Core catalogue)
-# and its libcamlrun.a is the matching older C walker, so we take only its
-# *libraries* and splice the fork's compiler and runtime over the top:
-#
-#   OCAMLLIB   a private copy of the switch's lib/ocaml carrying the
-#              fork's libcamlrun*.{a,so} and vreplay/*. Pairing the fork's
-#              OCaml-side vreplay with the switch's older C walker links
-#              clean and then segfaults on the first event, so these two
-#              have to move together.
-#   OCAMLPATH  the switch's lib, where Core, Async and the ppx drivers are
+#   OCAMLLIB   private copy of the switch's lib/ocaml carrying the
+#              fork's libcamlrun* and vreplay/* -- including the vreplay
+#              stubs (caml_wire_emit and the walker live there now, not
+#              in the runtime).
+#   OCAMLPATH  the switch's lib (Core, Async, the ppx drivers)
 #   PATH       the shims, then a mirror of the inherited PATH with every
-#              OCaml binary left out. ocamlc is the fork's with
-#              -visual-replay forced on; the rest of the toolchain is
-#              symlinked from the switch, which needs no instrumenting.
+#              OCaml binary left out. dune probes PATH for ocamlopt (it
+#              does not believe ocamlc -config), and a stray one -- the
+#              system 4.14 in /usr/bin -- would be handed -visual-replay;
+#              /usr/bin itself must stay for gcc and ld.
 #
-# That mirror is what makes the shim airtight. dune decides native is
-# available by looking for an ocamlopt on PATH -- it does not believe
-# ocamlc -config's native_compiler, which we answer honestly -- and the
-# fork is bytecode-only, so any stray ocamlopt anywhere on the path gets
-# picked up and handed -visual-replay, which it does not understand.
-# There is a system OCaml 4.14 in /usr/bin on this machine that does
-# exactly that. Dropping /usr/bin wholesale is not an option (gcc and ld
-# live there), so the mirror keeps everything except ocaml*.
-#
-# -visual-replay puts +vreplay on the load path itself (compmisc.ml), and
-# + resolves against OCAMLLIB, so vreplay/ living there is what lets a
-# project build with no added flags -- we cannot edit someone else's dune.
+# -visual-replay puts +vreplay on the load path, and + resolves against
+# OCAMLLIB, so a foreign project builds with no added flags.
 switch="${VREPLAY_SWITCH:-jsip-vreplay}"
 swdir="$(opam var --switch="$switch" prefix 2>/dev/null || true)"
 [ -n "$swdir" ] && [ -d "$swdir/lib/ocaml" ] ||
@@ -176,19 +144,15 @@ if [ "$(cat "$tc/.stamp" 2>/dev/null || true)" != "$tc_want" ]; then
   cp -p "$compiler"/runtime/libcamlrun*.a "$ocamllib/"
   cp -p "$compiler"/runtime/libcamlrun*.so "$ocamllib/" 2>/dev/null || true
   mkdir -p "$ocamllib/vreplay"
-  cp -p "$compiler"/vreplay/*.cmi "$compiler"/vreplay/*.cma "$ocamllib/vreplay/"
+  cp -p "$compiler"/vreplay/src/*.cmi "$compiler"/vreplay/src/*.cma \
+    "$compiler"/vreplay/src/libvreplaybyt.a "$ocamllib/vreplay/"
+  cp -p "$compiler"/vreplay/src/dllvreplaybyt*.so "$ocamllib/stublibs/" \
+    2>/dev/null || true
 
-  # Config probes have to answer for the compiler dune is about to drive,
-  # and must not carry -visual-replay -- it is not a config query, and
-  # ocamlc rejects it alongside -config.
-  #
-  # native_compiler is the one answer we override. The fork's configure
-  # leaves it true, but `make world` is bytecode-only and never produces
-  # an ocamlopt, so dune takes the config at its word, goes looking for
-  # one, and finds whatever stray ocamlopt is on the system -- which then
-  # chokes on -visual-replay. Saying false is the honest answer for what
-  # this toolchain can actually do, and puts dune on the bytecode path,
-  # where .exe becomes a self-contained -custom executable.
+  # Config queries answer for the fork, without -visual-replay (ocamlc
+  # rejects it alongside -config). native_compiler is overridden to
+  # false: this tree built no ocamlopt, and the honest answer keeps dune
+  # on the bytecode path, where .exe is a self-contained -custom link.
   cat >"$shims/ocamlc" <<EOF
 #!/bin/sh
 case " \$* " in
@@ -216,8 +180,8 @@ EOF
     ln -sf "$tool" "$shims/$(basename "$tool")"
   done
 
-  # The rest of the world, minus every OCaml binary. Earlier PATH entries
-  # win, as they would have on the real path.
+  # The rest of the world, minus every OCaml binary; earlier PATH
+  # entries win.
   mkdir -p "$tc/binsafe"
   IFS=: read -ra path_entries <<<"$PATH"
   for entry in "${path_entries[@]}"; do
@@ -246,9 +210,8 @@ tc_env=(
 )
 
 # --- 3. compile with -visual-replay -----------------------------------------
-# Names declared by (executable (name x)) / (executables (names x y)).
-# Enough of a parser for the shape dune files actually take: the stanza
-# head, then a (name ...) field somewhere inside it.
+# Names declared by (executable (name x)) / (executables (names x y)) --
+# enough of a parser for the shapes dune files actually take.
 dune_exe_names() {
   awk '
     /\(executables?([ \t(]|$)/ { in_exe = 1 }
@@ -283,10 +246,9 @@ scratch project."
   ;;
 esac
 
-# Kept between runs so dune can be incremental -- a second look at the
-# same program is worth seconds, not a rebuild. The toolchain is the one
-# thing dune cannot see changing underneath it, so that is what the stamp
-# guards: a new compiler or a new switch invalidates every artifact.
+# Kept between runs so dune stays incremental. The toolchain is the one
+# thing dune cannot see changing, so the stamp guards it: a new compiler
+# or switch invalidates everything.
 builddir="$work/build"
 if [ "$(cat "$work/.toolchain-stamp" 2>/dev/null || true)" != "$tc_want" ]; then
   rm -rf "$builddir"
@@ -295,16 +257,14 @@ mkdir -p "$builddir"
 printf '%s\n' "$tc_want" >"$work/.toolchain-stamp"
 
 if [ -n "$projroot" ]; then
-  # Project mode. Build in place so the file keeps its libraries, but send
-  # the artifacts to our own --build-dir: an instrumented _build is not
-  # something to leave behind in someone else's checkout.
+  # Project mode: build in place so the file keeps its libraries, with
+  # artifacts in our own --build-dir, not the checkout's _build.
   reldir="${progdir#"$projroot"/}"
   [ "$reldir" = "$progdir" ] && reldir="."
   mapfile -t cands < <(dune_exe_names "$progdir/dune")
   target="${VREPLAY_TARGET:-}"
-  # An .exe argument named the target outright; an .ml has to be traced
-  # back to the executable that includes it -- by name if the dune file
-  # declares one that matches, otherwise by there being only one.
+  # An .exe named the target outright; an .ml is matched to an
+  # executable by name, else by being the only one declared.
   case "$prog" in
   *.exe) [ -n "$target" ] || target="$name" ;;
   esac
@@ -319,19 +279,16 @@ if [ -n "$projroot" ]; then
 declares: ${cands[*]:-none}. Set VREPLAY_TARGET to one of them."
 
   say "compiling $projroot with -visual-replay ($reldir/$target.exe)"
-  # VREPLAY_FILE at build time keeps the ppx drivers -- themselves built
-  # by the instrumenting compiler -- from scattering vreplay.dump files,
-  # which is where the runtime writes when the variable is unset.
+  # VREPLAY_FILE=/dev/null keeps the ppx drivers (themselves
+  # instrumented) from scattering vreplay.dump files during the build.
   env "${tc_env[@]}" VREPLAY_FILE=/dev/null \
     dune build --root "$projroot" --build-dir "$builddir" --no-config \
     "$reldir/$target.exe" || die "instrumented build failed"
   exe="$builddir/default/$reldir/$target.exe"
   source_root="$projroot"
 else
-  # Standalone mode. A directory keeps its own module names and enters at
-  # main.ml; a single file's scratch module keeps the program's own name
-  # when that is a valid module name (so the TUI's source pane shows e.g.
-  # map_demo.ml), and falls back to "main" otherwise.
+  # Standalone mode. A directory enters at main.ml; a single file keeps
+  # its own name as the module when valid, else "main".
   if [ -d "$prog" ]; then
     module=main
   else
@@ -341,9 +298,8 @@ else
     esac
   fi
 
-  # Libraries the program opens. Anything Jane Street here is ppx_jane
-  # territory too: the deriving attributes are common enough in such
-  # programs that leaving the driver out is the surprising choice.
+  # Libraries inferred from the program's opens; any of them implies
+  # ppx_jane too.
   libs=""
   for lib in base core core_unix async; do
     case "$lib" in
@@ -364,9 +320,8 @@ else
   cat >"$builddir/dune-project" <<'EOF'
 (lang dune 3.0)
 EOF
-  # (modes byte) says out loud what the toolchain can do. dune still
-  # gives us a .exe from it -- a -custom link with the runtime and any C
-  # stubs baked in, which is what we want to run.
+  # (modes byte) still yields a .exe: a -custom link with the runtime
+  # and any C stubs baked in.
   {
     printf '(executable\n (name %s)\n (modes byte)\n' "$module"
     if [ -n "$libs" ]; then
@@ -383,20 +338,11 @@ EOF
 fi
 
 # --- 3b. the perf job -------------------------------------------------------
-# A heat profile has to come from the program as it really is, so this
-# builds a second copy with no -visual-replay in it, natively, on the
-# ordinary switch, and records that under perf. It is a separate job in
-# every sense: its own build directory, its own toolchain, and its own
-# process, running alongside the instrumented capture rather than after
-# it. The main line waits for it just before opening the TUI and reports
-# whatever it managed.
-#
-# It replaces two limitations. The old stage wrapped the program's own
-# source text in an in-process loop to accumulate samples, which meant it
-# could not touch a project built in place -- so for anything like the
-# exchange the profile had to be recorded by hand. Looping the twin from
-# the outside needs no source rewriting, so a multi-file program and
-# somebody else's dune project work the same way one file does.
+# Heat has to come from the program as it really is: a twin with no
+# -visual-replay in it, built natively on the ordinary switch and
+# recorded under perf -- its own build dir, toolchain and process,
+# running alongside the capture. The main line waits for it before the
+# TUI and reports what it managed.
 perfdir="$work/perf"
 rm -rf "$perfdir"
 mkdir -p "$perfdir"
@@ -408,9 +354,7 @@ heat_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
 # program's and a same-named library one.
 if [ -n "$projroot" ]; then entry_module="${target^}"; else entry_module="${module^}"; fi
 
-# Everything below runs in the background; it says what happened by
-# leaving a line in $perfdir/verdict, which the main line prints once the
-# instrumented run has had the terminal to itself.
+# Runs in the background; reports by leaving a line in $perfdir/verdict.
 perf_job() {
   verdict() { printf '%s\n' "$*" >"$perfdir/verdict"; }
 
@@ -425,8 +369,7 @@ perf_job() {
 
   local twin_exe=""
   if [ -n "$projroot" ]; then
-    # Its own --build-dir again, so the twin and the instrumented build
-    # never see each other's artifacts and the checkout keeps its own.
+    # Own --build-dir: the twin and the instrumented build stay apart.
     if opam exec --switch "$heat_switch" -- dune build --root "$projroot" \
       --build-dir "$perfdir/build" --no-config "$reldir/$target.exe" \
       >"$perfdir/twin-build.log" 2>&1; then
@@ -460,23 +403,16 @@ perf_job() {
     return 0
   }
 
-  # Record the twin looped, not run once. perf attributes percentages by
-  # sampling thousands of times a second, and every program here is
-  # milliseconds long -- the exchange's twin is 20ms, the whole point of
-  # the 11s instrumented run being instrumentation overhead. A single
-  # recording of that yields a handful of samples and the distiller
-  # rightly refuses it, so there is no reason to spend one first.
-  #
-  # Time a bare run to size the loop. Not a recorded one: perf's own
-  # startup is tens of milliseconds and would make the program look far
-  # slower than it is, sizing the loop far too small.
+  # Record the twin looped, not once: these programs are milliseconds
+  # long, and a single recording never clears the distiller's sample
+  # floor. The loop is sized by timing a bare run -- a recorded one
+  # carries perf's own startup and would size it far too small.
   local start_ms elapsed_ms iters status
   start_ms=$(date +%s%3N)
   "$twin_exe" ${prog_args[@]+"${prog_args[@]}"} >/dev/null 2>&1 || true
   elapsed_ms=$(($(date +%s%3N) - start_ms))
-  # Aim for ~10s of looped wall time. Some of each iteration is process
-  # startup rather than the program's own code, so the useful sample
-  # yield is a fraction of that -- budget generously.
+  # ~10s of looped wall time; part of each iteration is process startup,
+  # so budget generously.
   [ "$elapsed_ms" -lt 1 ] && elapsed_ms=1
   iters=$((10000 / elapsed_ms + 50))
   [ "$iters" -gt 200000 ] && iters=200000
@@ -500,9 +436,8 @@ LOOP
     return 0
   }
 
-  # --root . or dune walks up to whatever workspace encloses this
-  # checkout -- inside a git worktree that is the parent clone, where
-  # this target does not exist.
+  # --root . or dune walks up to an enclosing workspace (in a git
+  # worktree, the parent clone).
   (cd "$root" && dune build --root . bin/perf_heat_interface.exe) \
     >"$perfdir/distiller-build.log" 2>&1 || {
     verdict "no heat profile: distiller build failed (see ${perfdir#"$root/"}/distiller-build.log)"
@@ -519,17 +454,11 @@ LOOP
   status=0
   distill || status=$?
 
-  # Still nothing, and a single source file to work with. Looping the
-  # twin only helps when a run does more work than starting a process
-  # does; below that line every sample lands in the runtime coming up --
-  # caml_init_domains, add_frame_descriptors, the dynamic linker -- and
-  # none in the program. map_demo is the case: 200,000 runs gave 934k
-  # samples, 207 of them in the twin's own binary, all of them startup.
-  # The only way to reach that code is to loop inside one process, which
-  # means wrapping the source, which is exactly what costs the generality
-  # the pass above has. So it goes second, and only where it can work:
-  # one file, whose text goes in verbatim under a line directive so the
-  # symbols still point at the real program.
+  # Exit 3 and a single source file: when a run does less work than
+  # starting a process, every external-loop sample is runtime startup,
+  # and only an in-process loop reaches the program's code. Wrapping
+  # source costs generality, so it goes second and only for one file;
+  # the line directive keeps symbols pointing at the real program.
   if [ "$status" -eq 3 ] && [ -z "$projroot" ] && [ ! -d "$prog" ]; then
     local loopdir="$perfdir/inproc"
     mkdir -p "$loopdir"
@@ -574,8 +503,8 @@ perf_job >"$perfdir/job.log" 2>&1 &
 perf_job_pid=$!
 
 # --- 4. run it, dump going to its own sink ----------------------------------
-# The instrumentation picks its sink from VREPLAY_FILE, so the dump never
-# mixes with the program's own output, which stays on the terminal.
+# Events go to VREPLAY_FILE; the program's own output stays on the
+# terminal.
 say "running $name (its output follows; replay events go to the dump)"
 rm -f "$dump"
 env "${tc_env[@]}" VREPLAY_FILE="$dump" \
@@ -612,17 +541,15 @@ if [ -n "${VREPLAY_DUMP_ONLY:-}" ]; then
 fi
 
 # --- 5. hand the dump to the interface --------------------------------------
-# Built with this repo's own toolchain, not the fork's -- deliberately no
-# tc_env here. The dump's source paths are relative to the directory the
-# compiler ran in, which is the project root in project mode and the
-# scratch build context otherwise.
+# Built with this repo's own toolchain -- deliberately no tc_env. Dump
+# source paths are relative to where the compiler ran: the project root
+# or the scratch build context.
 say "building the interface"
 (cd "$interface" && dune build --root . app/bin/main.exe) ||
   die "interface build failed"
 app_args=(-dump-file "$dump" -source-root "$source_root")
-# -perf-file only if this interface has it. The flag arrives with the
-# heat work; until the pinned interface carries it, passing it is an
-# unknown-option error rather than a nicety.
+# -perf-file only if this interface advertises it; older pins reject
+# unknown options.
 if [ -f "$heat" ] &&
   "$interface/_build/default/app/bin/main.exe" -help 2>&1 |
   grep -q -- "-perf-file"; then

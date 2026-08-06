@@ -1,5 +1,5 @@
 open! Core
-open Sandbox_perf_heat
+open Canary_perf_heat
 
 (* every accepted name below was captured from a real [nm]/[perf report] over
    examples/greet.ml compiled with the 5.2.0+ox switch's ocamlopt *)

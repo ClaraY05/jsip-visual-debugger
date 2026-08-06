@@ -1,6 +1,6 @@
 (library
- (name sandbox_perf_heat)
- (public_name sandbox.perf_heat)
+ (name canary_perf_heat)
+ (public_name canary.perf_heat)
  (libraries core)
  (preprocess
   (pps ppx_jane)))

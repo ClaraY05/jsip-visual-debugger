@@ -5,12 +5,12 @@
 The outer shell of the JSIP visual replay debugger — a tool for
 recording an OCaml program's execution and replaying it visually. The
 system spans three repos; this one ties the other two together as git
-submodules and holds the glue: `cool_name.sh` (the one-command pipeline
-driver) and any outer-shell OCaml code in `lib/` and `bin/` (still the
-sandbox `hello` template, in the Jane Street style: `Core`, `ppx_jane`,
-dune, expect tests).
+submodules and holds the glue: `canary.sh` (the one-command pipeline
+driver) and the outer-shell OCaml code — currently the heat profile's
+`perf_heat/` and `bin/` — in the Jane Street style: `Core`, `ppx_jane`,
+dune, expect tests.
 
-The pipeline, all driven by `./cool_name.sh path/to/program.ml`: the
+The pipeline, all driven by `./canary.sh path/to/program.ml`: the
 **compiler** submodule (an `ocaml/ocaml` fork), behind a
 `-visual-replay` flag, instruments calls involving a catalogued data
 structure — stdlib `Map`/`Set`/`Queue`/`Hashtbl`/`Stack`/`Dynarray`,
@@ -41,9 +41,9 @@ pointer.
 Bumping a pointer is only half of it: **merging a commit that moves a
 gitlink does not move anybody's submodule checkout**, so everyone who
 pulls needs `git submodule update --init --recursive` before the
-pipeline will work. `cool_name.sh` checks for the fork's `vreplay/` and
-`testing/` up front so a stale checkout fails in a second rather than
-after a four-minute build of the wrong compiler.
+pipeline will work. `canary.sh` keys its rebuild on the pinned commit
+and on `vreplay/src/vreplay.cma` existing, so a stale checkout gets
+rebuilt rather than silently reused.
 
 ### jsip-debugger-compiler
 
@@ -57,31 +57,28 @@ is only history and diffs against it are meaningless. What the fork adds:
 - `Clflags.visual_replay` (the `-visual-replay` flag) gates everything.
 - `typing/vreplay_instrumentation.ml{,i}` rewrites the typedtree,
   wrapping calls whose arguments or result involve a structure from
-  `vreplay/data_structure.ml`'s catalogue — that file is the authority
-  on what is tracked and on each one's heap layout, and the interface
-  mirrors its constructor names.
-- `vreplay/` — runtime library auto-linked under the flag
+  `vreplay/src/data_structure.ml`'s catalogue — that file is the
+  authority on what is tracked and on each one's heap layout, and the
+  interface mirrors its constructor names.
+- `vreplay/src/` — runtime library auto-linked under the flag
   (`bytecomp/bytelink.ml` inserts `vreplay.cma` after `stdlib.cma`;
   `driver/compmisc.ml` puts `+vreplay` on the load path). It assigns
   tracked values stable ids in a weak registry and walks their heap
-  shape for each event's snapshot.
-- `runtime/snapshot.c` — the `caml_wire_emit` primitive and the dump
-  sink, chosen at first emit: `VREPLAY_SOCK=<path>` (Unix stream
-  socket, falls through to the file sink if the connect fails),
-  `VREPLAY_FILE=<path>`, else `./vreplay.dump`. Never stdout.
-  Instrumented bytecode must run under the fork's own `ocamlrun` — the
-  coupling the toolchain assembly below exists to satisfy.
-  Draft PR #20 in the compiler repo moves these stubs into the vreplay
-  library, which would let instrumented programs run under any
-  ABI-compatible runtime; if it lands, step 2 of the pipeline gets
-  simpler, not different.
-- `testing/` — golden-dump cases and `run_tests.sh`: compiles and runs
-  each case, validates every dump line parses and depth balances, and
-  diffs against `expected/` up to a consistent address bijection
-  (`--promote` regenerates). The interface vendors these goldens
-  verbatim as its fixtures.
+  shape for each event's snapshot. Its C stubs
+  (`snapshot.c`/`wire_sink.c`, formerly `runtime/snapshot.c`) carry
+  `caml_wire_emit` and the dump sink, chosen at first emit:
+  `VREPLAY_SOCK=<path>` (Unix stream socket, falls through to the file
+  sink if the connect fails), `VREPLAY_FILE=<path>`, else
+  `./vreplay.dump`. Never stdout. The stubs living in the library (PR
+  #20, landed) means instrumented programs run under any ABI-compatible
+  runtime, not only the fork's own `ocamlrun`.
+- `vreplay/tests/` (formerly `testing/`) — golden-dump cases and
+  `run_tests.sh`: compiles and runs each case, validates every dump
+  line parses and depth balances, and diffs against `expected/` up to a
+  consistent address bijection (`--promote` regenerates). The interface
+  vendors these goldens verbatim as its fixtures.
 
-Build facts (cool_name automates all of this): **the pipeline builds
+Build facts (canary.sh automates all of this): **the pipeline builds
 bytecode** — `make world`, never `world.opt`. That is now a choice rather
 than a limit: the fork grew native `-visual-replay` support (a follow-up
 `make opt` gives `ocamlopt` and `vreplay.cmxa`, and its golden suite then
@@ -112,7 +109,8 @@ whatever the cursor points at, and `[`/`]` to pan by hand. Layout:
 profile), `lib/parsing` (readers for the dump, the sources and the heat
 profile), `lib/replay` (the per-step replay model), `app/tui`
 (`components/` for the panes and theme, `src/` for the app — it moved out
-of `lib/` on 2026-08-04), and `app/bin/main.exe`, run as
+of `lib/` on 2026-08-04), `app/web` (a bonsai_web client/server replay
+with a zoomable heap canvas), and `app/bin/main.exe`, run as
 `main.exe -dump-file FILE [-source-root DIR] [-perf-file heat.sexp]`.
 `testing/` vendors the compiler's golden dumps verbatim, and the expect
 tests run on them.
@@ -131,9 +129,9 @@ neither submodule. To run dune on the nested interface checkout, force
 its root: `cd jsip-debugger-interface && dune build --root .` (plain
 `dune build` walks up to this repo's workspace, which ignores it).
 
-## The cool_name pipeline
+## The canary pipeline
 
-`./cool_name.sh path/to/program.ml [args...]` runs the whole pipeline.
+`./canary.sh path/to/program.ml [args...]` runs the whole pipeline.
 The argument can also be a **directory** (a multi-file program entering
 at `main.ml`, the rest ordinary dependency modules) or a **`.exe`**
 naming a dune target instead of a source file.
@@ -204,10 +202,10 @@ both gitignored.
    stops here — after the heat, so a dump-only capture still gets one.
 5. Builds the interface and execs the TUI on the dump, with
    `-source-root` at the project root (project mode) or the scratch
-   build context (standalone), plus `-perf-file` **only when the
-   interface advertises that flag** — it arrives with the heat work, and
-   passing it to an interface that predates it is an unknown-option
-   error rather than a nicety. `q` quits, back to your shell.
+   build context (standalone), plus `-perf-file` only when the
+   interface advertises that flag (the pinned interface now does; the
+   probe protects runs against older checkouts, where the unknown
+   option is an error). `q` quits, back to your shell.
 
 ### The toolchain, and why it takes assembling
 
@@ -253,7 +251,6 @@ dune build                 # compile
 dune runtest               # run all tests
 dune fmt --auto-promote    # format (uses .ocamlformat: janestreet profile, margin 77)
 dune build @doc            # generate odoc HTML
-dune exec bin/main.exe -- Ada   # run the example binary
 ```
 
 Never modify anything under `_build/` — it's regenerated by dune.
@@ -261,14 +258,12 @@ Never modify anything under `_build/` — it's regenerated by dune.
 Root dune commands cover only this repo's code — the submodules are
 excluded from the workspace (see the dune workspace note above).
 
-Toolchain skew, pre-existing on a clean checkout of `main`: the local
-opam switch is a Jane Street preview (`5.2.0+ox`, `dune 3.22+ox`,
-preview `ppx_expect`), while CI installs standard opam releases.
-Currently `dune runtest` crashes locally in the expect-test runtime
-(`Sys_error ".../test_hello.ml"`), and CI's build step fails on
-`lib/hello/test/test_hello.ml` because the standard
-`expect_test_helpers_core` wants `require_does_raise [%here]` — so
-`main` CI is red. Don't mistake either for a regression you caused.
+Toolchain skew: the local opam switch is a Jane Street preview
+(`5.2.0+ox`, `dune 3.22+ox`, preview `ppx_expect`), while CI installs
+standard opam releases — code has to build under both. The preview
+`ppx_expect` resolves corrections against the wrong root, which is why
+`perf_heat/test/dune` overrides `-source-tree-root` back to the test
+directory.
 
 ## Code conventions
 
@@ -332,7 +327,7 @@ Match the existing style; don't introduce alternatives without a reason. When cr
 
 - Only open if made for opening (`Let_syntax`, `O`, `Composition_infix`)
 - `_intf.ml` for shared types
-- Make a top-level lib module (see `lib/hello/src/sandbox_hello.ml`)
+- Make a top-level lib module (see `perf_heat/src/canary_perf_heat.ml`)
 - Small lib = one module
 - Don't alias modules (if must: keep name same)
 
@@ -382,8 +377,8 @@ Libraries follow a uniform pattern:
 
 ```
 (library
- (name sandbox_<x>)
- (public_name sandbox.<x>)
+ (name canary_<x>)
+ (public_name canary.<x>)
  (libraries <deps>)
  (preprocess (pps ppx_jane)))
 ```
@@ -392,8 +387,8 @@ Tests:
 
 ```
 (library
- (name sandbox_<x>_test)
- (libraries sandbox_<x> expect_test_helpers_core core)
+ (name canary_<x>_test)
+ (libraries canary_<x> expect_test_helpers_core core)
  (inline_tests)
  (preprocess (pps ppx_jane)))
 ```
@@ -407,20 +402,14 @@ jsip-debugger-compiler/    submodule: OCaml compiler fork, tracking
                            vreplay-main
 jsip-debugger-interface/   submodule: frontend, tracking main (has its
                            own CLAUDE.md and skills)
-cool_name.sh               the pipeline driver (see above)
+canary.sh                  the pipeline driver (see above)
 examples/                  sample inputs for it: map_demo.ml,
                            map_fold.ml, calculator/ (multi-file),
                            order_book/ (Core)
 perf_heat/                 the heat profile's demangler, perf-report
-                           parser and aggregator
+                           parser and aggregator (src/ and test/)
 bin/                       perf_heat_interface.exe, the CLI over it
 _vreplay/                  its gitignored working area, including the
                            assembled .toolchain/
 dune                       excludes the submodules from the workspace
-lib/
-  hello/
-    src/     example library (Sandbox_hello.Hello)
-    test/    expect tests for it
-bin/
-  main.ml    example executable
 ```

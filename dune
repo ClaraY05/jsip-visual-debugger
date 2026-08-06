@@ -1,5 +1,5 @@
 ; The two submodules are separate projects, not part of this dune
 ; workspace: the compiler fork builds with configure/make, and the
-; interface defines its own [sandbox] package that would clash with ours.
+; interface is its own dune project with its own toolchain story.
 
 (data_only_dirs jsip-debugger-compiler jsip-debugger-interface)

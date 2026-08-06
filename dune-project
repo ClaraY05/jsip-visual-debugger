@@ -2,15 +2,16 @@
 
 (generate_opam_files true)
 
-(maintainers "TODO")
+(maintainers "")
 
-(authors "TODO")
+(authors "Robyn Wu Clara Yee")
 
 (license MIT)
 
 (package
- (name sandbox)
- (synopsis "A blank OCaml project in the Jane Street style")
+ (name canary)
+ (synopsis
+  "Canary: An ocaml visual tool to observe ocaml projects over time")
  (depends
   (ocaml
    (>= 5.2.0))

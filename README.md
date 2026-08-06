@@ -7,9 +7,9 @@ debugger TUI:
 
 ```sh
 git submodule update --init --recursive   # once, after cloning
-./cool_name.sh examples/map_demo.ml                # one map, built and trimmed
-./cool_name.sh examples/calculator                 # multi-file: lexer → parser → eval
-./cool_name.sh examples/order_book/order_book.exe  # a Core limit order book
+./canary.sh examples/map_demo.ml                # one map, built and trimmed
+./canary.sh examples/calculator                 # multi-file: lexer → parser → eval
+./canary.sh examples/order_book/order_book.exe  # a Core limit order book
 ```
 
 The first run also builds the forked compiler (~4 min) and assembles a
@@ -24,7 +24,7 @@ where it stands, keeping its own libraries, ppx and dependencies. That is
 how a whole program comes in:
 
 ```sh
-./cool_name.sh ~/jsip-exchange/app/debug_scenario/bin/main.exe
+./canary.sh ~/jsip-exchange/app/debug_scenario/bin/main.exe
 ```
 
 Artifacts go to a private `--build-dir`, so an instrumented `_build` is
@@ -36,7 +36,7 @@ An exchange scenario runs until interrupted, so capture first and replay
 after — `VREPLAY_DUMP_ONLY` stops the pipeline once the dump is on disk:
 
 ```sh
-VREPLAY_DUMP_ONLY=1 ./cool_name.sh \
+VREPLAY_DUMP_ONLY=1 ./canary.sh \
   ../test/jsip-exchange/app/scenario_runner/bin/main.exe -scenario book-filler -seed 0
 # let the market run 15–30 seconds, then Ctrl-C
 
@@ -126,25 +126,12 @@ needs a switch built by the fork's own compiler and how that is wired up.
 
 ---
 
-Based on an OCaml project template in the Jane Street style: [`Core`](https://opam.ocaml.org/packages/core/)
-as the standard library, `ppx_jane` for deriving, `dune` for builds, expect
-tests, and the `janestreet` ocamlformat profile. Wired up with GitHub Actions
-and the Claude GitHub Action.
+This repo's own OCaml code (the `canary` package) is in the Jane Street
+style: [`Core`](https://opam.ocaml.org/packages/core/) as the standard
+library, `ppx_jane` for deriving, `dune` for builds, expect tests, and the
+`janestreet` ocamlformat profile.
 
-Click **"Use this template"** to start a new project from it.
-
-## First use: rename the package
-
-Everything is named `sandbox` as a placeholder. To rename it to `<your_name>`:
-
-1. `dune-project` — the `(name sandbox)` in the `(package ...)` stanza.
-2. `lib/hello/src/dune` and `lib/hello/test/dune` — `sandbox_hello`,
-   `sandbox.hello`, `sandbox_hello_test`.
-3. `lib/hello/src/sandbox_hello.ml` / `.mli` — rename both files, and update
-   the `open Sandbox_hello` references in `bin/main.ml` and
-   `lib/hello/test/test_hello.ml`.
-
-The generated `sandbox.opam` is produced by dune from `dune-project` — don't
+The generated `canary.opam` is produced by dune from `dune-project` — don't
 edit it by hand; it regenerates on the next `dune build`.
 
 ## Build, test, format
@@ -153,7 +140,6 @@ edit it by hand; it regenerates on the next `dune build`.
 dune build                      # compile
 dune runtest                    # run tests
 dune fmt --auto-promote         # format (.ocamlformat: janestreet profile)
-dune exec bin/main.exe -- Ada   # run the example binary
 ```
 
 ## GitHub Actions
@@ -167,18 +153,19 @@ Two workflows ship with this template:
   [Claude Code Action](https://github.com/anthropics/claude-code-action) when
   someone writes `@claude` in an issue or PR.
 
-The Claude workflow needs an `ANTHROPIC_API_KEY` secret, which is **not**
-copied when you create a repo from this template. In each new repo add it under
-**Settings → Secrets and variables → Actions**, or set it as an **organization
+The Claude workflow needs an `ANTHROPIC_API_KEY` secret, added under
+**Settings → Secrets and variables → Actions**, or set as an **organization
 secret** so all repos inherit it. (You can instead use a
 `CLAUDE_CODE_OAUTH_TOKEN` from `/install-github-app`.)
 
 ## Layout
 
 ```
-lib/hello/src/    example library (Sandbox_hello.Hello)
-lib/hello/test/   expect tests
-bin/main.ml       example executable
+canary.sh          the pipeline driver
+examples/          sample inputs for it
+perf_heat/         the heat profile's demangler, perf-report parser
+                   and aggregator (src/ and test/)
+bin/               perf_heat_interface.exe, the CLI over it
 ```
 
 See `CLAUDE.md` for the full code conventions.

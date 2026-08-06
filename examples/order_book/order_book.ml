@@ -21,7 +21,7 @@
    draws each order once and points at it from each of the three places it
    appears, rather than drawing three copies.
 
-   Run it with [./cool_name.sh examples/order_book/order_book.exe]. It prints
+   Run it with [./canary.sh examples/order_book/order_book.exe]. It prints
    the closing books, the tape and the P&L-ish tally, then exits.
 
    One thing to know when reading the code below: an event rooted at

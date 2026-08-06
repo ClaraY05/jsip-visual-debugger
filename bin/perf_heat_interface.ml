@@ -2,7 +2,7 @@
     [perf report --stdio -F sample,sym] on stdin and writes the profile sexp
     the interface's [-perf-file] flag consumes.
 
-    Run by cool_name.sh's perf stage:
+    Run by canary.sh's perf stage:
 
     {v
     perf report ... -F sample,sym | perf_heat_interface.exe Greet heat.sexp
@@ -14,7 +14,7 @@
     to 3 by re-recording with more iterations. *)
 
 open! Core
-open Sandbox_perf_heat
+open Canary_perf_heat
 
 let default_min_samples = 2000
 
