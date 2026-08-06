@@ -217,6 +217,22 @@ both gitignored.
    The TUI runs as a child rather than `exec`'d so the exit trap can do
    that.
 
+   The link is also opened in a browser, unless `VREPLAY_NO_OPEN` is
+   set. On a headless box there is no browser to launch, so the useful
+   move is handing the URL to whatever is showing you the terminal:
+   `$BROWSER` if it names something real (a `BROWSER=true` — the common
+   way images suppress browser launching — is a no-op, not an answer,
+   and is skipped), then a remote editor's `--openExternal`, then macOS
+   `open`, then `xdg-open` — that last only with a display *and* a
+   registered `https` handler, since `xdg-open` exits 0 with nothing
+   behind it and would otherwise have us announce a tab that never
+   appeared. It runs backgrounded, after the interface build, writing
+   its outcome to `_vreplay/<prog>/web/open.log`: an editor CLI takes
+   ~30s to reach its window, and when the window that owns
+   `$VSCODE_IPC_HOOK_CLI` has closed the leftover socket *hangs* rather
+   than erroring — hence a bounded, backgrounded, best-effort attempt
+   with the printed link as the guarantee.
+
    The port is the first free one from 8080 up, and the run says so when
    it is not 8080. `VREPLAY_WEB_PORT` pins it instead, and a pinned port
    that is busy is an error naming what holds it — asking for a specific

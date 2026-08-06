@@ -17,7 +17,8 @@
 # jsip-vreplay), VREPLAY_TARGET (executable when a dune file declares
 # several), VREPLAY_DUMP_ONLY (stop once the dump is on disk),
 # VREPLAY_WEB_PORT (pins the web server's port; unset, it takes the
-# first free one from 8080),
+# first free one from 8080), VREPLAY_NO_OPEN (print the shareable link
+# without opening a browser on it),
 # COMPILER_DIR / INTERFACE_DIR (override the submodule checkouts).
 set -euo pipefail
 
@@ -622,11 +623,14 @@ VREPLAY_WEB_PORT to one that is free"
     >"$webdir/serve.log" 2>&1 &
   serve_pid=$!
   tunnel_pid=""
+  open_pid=""
   # HUP as well as INT and TERM: closing the terminal is exactly how the
   # orphans above get made. SIGKILL still cannot be caught, which is why
-  # the port search above exists.
-  trap 'kill $serve_pid $tunnel_pid 2>/dev/null || true; rm -f "$webdir/url"' \
-    EXIT HUP INT TERM
+  # the port search above exists. The browser-opening job is in here too
+  # -- it can outlive a TUI that was quit quickly, and leaving it behind
+  # would be the same mistake in miniature.
+  trap 'kill $serve_pid $tunnel_pid $open_pid 2>/dev/null || true
+    rm -f "$webdir/url"' EXIT HUP INT TERM
   while ! grep -q 'jsip web debugger' "$webdir/serve.log" 2>/dev/null; do
     kill -0 "$serve_pid" 2>/dev/null ||
       die "the web server died; see ${webdir#"$root/"}/serve.log"
@@ -668,6 +672,84 @@ VREPLAY_WEB_PORT to one that is free"
   say "  unguessable, not private: anyone with the link can use the replay,"
   say "  and its api/source lets them read files off this machine"
   say "  a viewer who sees nothing is likely on a network blocking trycloudflare.com"
+
+  # Nothing here may fail the run: the link is already printed, and the
+  # share works whether or not a browser appears. Hence the timeout and
+  # the swallowed output.
+  #
+  # </dev/null is load-bearing, not tidiness. This runs backgrounded, and
+  # a child that reads the terminal from a background process group is
+  # stopped with SIGTTIN and never returns -- which is exactly how the
+  # editor branch below fails, silently and forever, when stdin is left
+  # attached. -k for the mirror image: a child that ignores SIGTERM would
+  # otherwise keep timeout waiting on it just as long. The budget is
+  # large because the editor CLI is slow and contended -- it measured
+  # 30s idle here and 60s alongside the interface build -- and nothing
+  # waits on this, so a generous ceiling costs nothing.
+  #
+  # setsid for the same reason one layer down. Redirecting stdin is not
+  # enough on its own: the TUI has the terminal in raw mode by the time
+  # this runs, and a child that opens /dev/tty itself -- node does --
+  # gets stopped on SIGTTOU from a background process group no matter
+  # where stdin points. A new session has no controlling terminal to
+  # reach for.
+  try_open() {
+    local runner=()
+    command -v setsid >/dev/null 2>&1 && runner+=(setsid)
+    command -v timeout >/dev/null 2>&1 && runner+=(timeout -k 5 180)
+    if [ ${#runner[@]} -eq 0 ]; then
+      "$@" </dev/null >/dev/null 2>&1
+    else
+      "${runner[@]}" "$@" </dev/null >/dev/null 2>&1
+    fi
+  }
+
+  # This box is the normal case for the tool -- a headless server with no
+  # browser installed -- so the useful move is not to launch one here but
+  # to hand the URL to whatever is showing the human their terminal.
+  open_url() {
+    # $BROWSER wins when it names something real. Dev images often set it
+    # to `true` to stop things spawning browsers; that is a no-op, not a
+    # browser, and treating it as an answer would silently open nothing.
+    case "${BROWSER:-}" in
+    "" | : | true | /bin/true | /usr/bin/true) ;;
+    *) try_open "$BROWSER" "$1" && return 0 ;;
+    esac
+    # A remote editor reaches the machine the human is actually at, which
+    # xdg-open on this side cannot. The socket in the environment goes
+    # stale when its window closes, so a failure here is ordinary.
+    if [ -n "${VSCODE_IPC_HOOK_CLI:-}" ]; then
+      local editor
+      for editor in code code-insiders cursor windsurf; do
+        command -v "$editor" >/dev/null 2>&1 || continue
+        try_open "$editor" --openExternal "$1" && return 0
+      done
+    fi
+    [ "$(uname -s)" != Darwin ] || { try_open open "$1" && return 0; }
+    # Last: a local desktop. xdg-open exits 0 even when nothing is
+    # registered to handle https, so its status alone would have us
+    # announce a browser that never opened -- ask first whether anything
+    # would actually handle the URL.
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && has_https_handler; then
+      try_open xdg-open "$1" && return 0
+    fi
+    return 1
+  }
+
+  # Deliberately not x-www-browser or sensible-browser: both exist on
+  # machines with no browser behind them and would answer yes.
+  has_https_handler() {
+    [ -z "$(xdg-mime query default x-scheme-handler/https 2>/dev/null)" ] ||
+      return 0
+    local browser
+    for browser in firefox google-chrome google-chrome-stable chromium \
+      chromium-browser brave-browser microsoft-edge epiphany; do
+      command -v "$browser" >/dev/null 2>&1 && return 0
+    done
+    return 1
+  }
+
+  [ -z "${VREPLAY_NO_OPEN:-}" ] || say "  (VREPLAY_NO_OPEN set; not opening it)"
 fi
 
 # --- 5. hand the dump to the interface --------------------------------------
@@ -686,6 +768,35 @@ if [ -f "$heat" ] &&
   app_args+=(-perf-file "$heat")
 elif [ -f "$heat" ]; then
   say "note: this interface has no -perf-file; heat profile written but not shown"
+fi
+# Opened here rather than back where the URL was printed, so the tab and
+# the TUI arrive together instead of the tab racing an interface build.
+#
+# Backgrounded because handing a URL to a remote editor's CLI is slow --
+# ~30s idle here, ~60s under load, since it starts a node process and
+# waits on a reply from the editor window over a socket. And bounded,
+# because the failure that actually happens is worse than slow: when the
+# window that owns $VSCODE_IPC_HOOK_CLI has closed, the socket file
+# stays behind and connecting to it HANGS rather than erroring. Without
+# the timeout in try_open that would be an unkillable wait; with it the
+# branch just gives up and the printed link stands. The outcome goes to
+# web/open.log, not the terminal, which the TUI is about to own.
+if [ -n "$web" ] && [ -z "${VREPLAY_NO_OPEN:-}" ]; then
+  say "opening it in your browser"
+  {
+    # Deliberately no readiness probe on $url from here. The server is
+    # up (its banner is what ended the wait earlier) and the tunnel is
+    # registered (cloudflared printed the URL). What is left is DNS for
+    # a brand-new trycloudflare subdomain, which this box frequently
+    # cannot resolve at all -- and does not need to, since the browser
+    # that follows the link resolves it from its own network.
+    if open_url "$url"; then
+      echo "opened $url"
+    else
+      echo "could not open a browser here; use the printed link: $url"
+    fi
+  } >"$webdir/open.log" 2>&1 &
+  open_pid=$!
 fi
 say "replaying in the TUI (q quits, arrows step)"
 [ -n "$web" ] || exec "$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
