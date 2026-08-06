@@ -121,6 +121,82 @@ identifier, so `Hashtbl.set tbl ~key ~data` is recorded and
 `Hashtbl.set t.field ...` is not, while a tracked **result** fires
 through record fields either way.
 
+### Sharing the replay on the web
+
+```sh
+./canary.sh --web examples/map_demo.ml
+```
+
+`--web` runs the same pipeline and opens the TUI as usual, but also
+serves the browser interface behind a temporary public URL (a
+cloudflared quick tunnel), so someone who is not at this machine can
+open the visualizer while you drive the TUI. The `trycloudflare.com`
+link is printed before the TUI takes the terminal and kept in
+`_vreplay/<program>/web/url`; quitting the TUI (`q`) ends the share.
+(The `share-on-web` skill in `.claude/skills/share-on-web/` walks the
+same steps by hand, e.g. to serve an existing dump without rerunning
+the program.) The one piece neither can set up for you is `cloudflared`
+itself, which needs root to install:
+
+```sh
+# Debian/Ubuntu
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb \
+  -o /tmp/cloudflared.deb
+sudo dpkg -i /tmp/cloudflared.deb
+
+# macOS
+brew install cloudflared
+```
+
+Other platforms: grab a binary from
+<https://github.com/cloudflare/cloudflared/releases>.
+
+The link lives only while the tunnel runs, and it extends the debugger's
+local file read (the server's `/api/source`) to anyone holding it —
+share for a live demo, then tear it down.
+
+#### Doing it by hand
+
+`--web` is these steps; run them yourself to share an **existing** dump
+without rerunning the program. How it works: `app/web/server/serve.exe`
+is self-contained — the js_of_ocaml-compiled client is embedded in the
+binary — and serves the replay's inputs itself on localhost only
+(`/api/dump`, `/api/source`, `/api/heat`); the browser fetches the dump
+and replays it with the same readers the TUI uses. The tunnel is an
+*outbound* connection to Cloudflare's edge, which proxies a random
+`trycloudflare.com` subdomain back to your loopback port — no account,
+no open inbound ports, and the URL dies with the process.
+
+One-time, after installing cloudflared (the web app's libraries are not
+in the TUI's dependency set):
+
+```sh
+opam install --switch 5.2.0+ox -y bonsai_web async_js cohttp-async \
+  js_of_ocaml-ppx ppx_html
+cd jsip-debugger-interface
+opam exec --switch 5.2.0+ox -- dune build --root . app/web/server/serve.exe
+```
+
+Each share (flag values for a pipeline run are under
+`_vreplay/<program>/`; a `VREPLAY_DUMP_ONLY=1 ./canary.sh ...` run
+prints them exactly):
+
+```sh
+jsip-debugger-interface/_build/default/app/web/server/serve.exe \
+  -dump-file _vreplay/map_demo/map_demo.dump \
+  -source-root _vreplay/map_demo/build/_build/default \
+  -perf-file _vreplay/map_demo/heat.sexp        # wait for its ready line
+
+cloudflared tunnel --url http://127.0.0.1:8080 --config /dev/null \
+  --no-autoupdate                               # in a second terminal
+```
+
+The shareable URL is in cloudflared's startup banner (on stderr).
+Teardown is Ctrl-C on both processes. Gotchas: `--config /dev/null` is
+required if you have ever configured a named tunnel; no URL within ~15
+seconds usually means QUIC is blocked — retry with `--protocol http2`
+rather than waiting out cloudflared's own slow fallback.
+
 `CLAUDE.md` has how the pieces fit together, including why linking Core
 needs a switch built by the fork's own compiler and how that is wired up.
 

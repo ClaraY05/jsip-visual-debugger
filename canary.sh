@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # The outer shell of the visual replay debugger.
 #
-#   ./canary.sh path/to/program.ml [args...]
+#   ./canary.sh [--web] path/to/program.ml [args...]
 #
 # Pipeline: 1. build the forked compiler if the pinned commit changed;
 # 2. assemble a toolchain (the fork's compiler over an opam switch's
 # libraries); 3. compile with -visual-replay -- in place if the file is
 # already a dune target, else wrapped in a scratch project -- while 3b
 # profiles an uninstrumented twin in the background; 4. run it, events
-# going to the dump; 5. exec the TUI on the dump.
+# going to the dump; 5. exec the TUI on the dump -- with --web, the
+# browser interface is served behind a shareable trycloudflare.com URL
+# alongside the TUI, and quitting the TUI ends the share.
 #
 # Artifacts: _vreplay/<program-name>/; shared toolchain:
 # _vreplay/.toolchain/. Knobs: VREPLAY_SWITCH (library switch, default
 # jsip-vreplay), VREPLAY_TARGET (executable when a dune file declares
 # several), VREPLAY_DUMP_ONLY (stop once the dump is on disk),
+# VREPLAY_WEB_PORT (the web server's port, default 8080),
 # COMPILER_DIR / INTERFACE_DIR (override the submodule checkouts).
 set -euo pipefail
 
@@ -27,10 +30,17 @@ die() {
   exit 1
 }
 
+web=""
+if [ "${1:-}" = "--web" ]; then
+  web=1
+  shift
+fi
 [ $# -ge 1 ] ||
-  die "usage: ./canary.sh path/to/program.ml [args...]
-             ./canary.sh path/to/program-dir [args...]
-             ./canary.sh path/to/target.exe [args...]"
+  die "usage: ./canary.sh [--web] path/to/program.ml [args...]
+             ./canary.sh [--web] path/to/program-dir [args...]
+             ./canary.sh [--web] path/to/target.exe [args...]
+--web also serves the replay behind a shareable public URL while the
+TUI is open"
 prog="${1%/}"
 shift
 prog_args=("$@")
@@ -59,6 +69,9 @@ got: $prog"
 fi
 [ -f "$compiler/configure" ] && [ -f "$interface/dune-project" ] ||
   die "submodules missing; run: git submodule update --init --recursive"
+# Fail on a missing cloudflared now, not after a four-minute build.
+[ -z "$web" ] || command -v cloudflared >/dev/null 2>&1 ||
+  die "--web needs cloudflared; see README.md (Sharing the replay on the web)"
 
 name="$(basename "$prog")"
 name="${name%.ml}"
@@ -540,6 +553,77 @@ if [ -n "${VREPLAY_DUMP_ONLY:-}" ]; then
   exit 0
 fi
 
+# --- 5w. serve the replay behind a shareable URL ----------------------------
+# The web server is self-contained (the js_of_ocaml client is embedded in
+# serve.exe) and binds loopback only; a cloudflared quick tunnel is the
+# one doorway in. It builds on the ordinary OxCaml switch -- the TUI's
+# dependencies do not cover bonsai_web. The share runs alongside the TUI
+# that step 5 opens next, and the exit trap tears it down when the TUI
+# closes.
+if [ -n "$web" ]; then
+  web_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
+  say "building the web interface (switch $web_switch)"
+  (cd "$interface" && opam exec --switch "$web_switch" -- \
+    dune build --root . app/web/server/serve.exe) ||
+    die "web interface build failed. If libraries are missing: \
+opam install --switch $web_switch -y bonsai_web async_js cohttp-async \
+js_of_ocaml-ppx ppx_html"
+
+  webdir="$work/web"
+  rm -rf "$webdir"
+  mkdir -p "$webdir"
+  port="${VREPLAY_WEB_PORT:-8080}"
+  serve_args=(-dump-file "$dump" -source-root "$source_root" -port "$port")
+  [ -f "$heat" ] && serve_args+=(-perf-file "$heat")
+
+  "$interface/_build/default/app/web/server/serve.exe" "${serve_args[@]}" \
+    >"$webdir/serve.log" 2>&1 &
+  serve_pid=$!
+  tunnel_pid=""
+  trap 'kill $serve_pid $tunnel_pid 2>/dev/null || true; rm -f "$webdir/url"' EXIT INT TERM
+  while ! grep -q 'jsip web debugger' "$webdir/serve.log" 2>/dev/null; do
+    kill -0 "$serve_pid" 2>/dev/null ||
+      die "the web server died (port $port taken?); see ${webdir#"$root/"}/serve.log"
+    sleep 0.2
+  done
+
+  # cloudflared prints the URL in its stderr banner. No URL in ~15s
+  # usually means QUIC is blocked, and its own fallback takes over a
+  # minute -- retry on http2 instead.
+  # Sets $tunnel_pid and $url; must run in this shell, not a subshell,
+  # or the trap and the final wait would have no pid to act on.
+  url=""
+  start_tunnel() {
+    cloudflared tunnel --url "http://127.0.0.1:$port" --config /dev/null \
+      --no-autoupdate "$@" >>"$webdir/tunnel.log" 2>&1 &
+    tunnel_pid=$!
+    local i
+    for i in $(seq 1 75); do
+      url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' \
+        "$webdir/tunnel.log" 2>/dev/null | head -1)"
+      [ -n "$url" ] && return 0
+      kill -0 "$tunnel_pid" 2>/dev/null || return 1
+      sleep 0.2
+    done
+    kill "$tunnel_pid" 2>/dev/null || true
+    return 1
+  }
+
+  say "opening the tunnel"
+  start_tunnel || {
+    say "no URL after 15s (QUIC likely blocked); retrying over http2"
+    start_tunnel --protocol http2
+  } || die "cloudflared could not open a tunnel; see ${webdir#"$root/"}/tunnel.log"
+
+  printf '%s\n' "$url" >"$webdir/url"
+  say "shareable link: $url"
+  say "  (kept in ${webdir#"$root/"}/url while the share is up)"
+  say "  alive only while the TUI is open -- quitting it ends the share"
+  say "  unguessable, not private: anyone with the link can use the replay,"
+  say "  and its api/source lets them read files off this machine"
+  say "  a viewer who sees nothing is likely on a network blocking trycloudflare.com"
+fi
+
 # --- 5. hand the dump to the interface --------------------------------------
 # Built with this repo's own toolchain -- deliberately no tc_env. Dump
 # source paths are relative to where the compiler ran: the project root
@@ -558,4 +642,8 @@ elif [ -f "$heat" ]; then
   say "note: this interface has no -perf-file; heat profile written but not shown"
 fi
 say "replaying in the TUI (q quits, arrows step)"
-exec "$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
+[ -n "$web" ] || exec "$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
+# With the share up, exec would orphan it past the exit trap: run the
+# TUI as a child instead, so closing it tears the share down.
+"$interface/_build/default/app/bin/main.exe" "${app_args[@]}" || true
+say "TUI closed; tearing down the share at $url"

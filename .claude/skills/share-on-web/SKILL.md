@@ -8,6 +8,14 @@ description: Build the Bonsai web interface and expose it on a temporary public 
 Serve the web interface from this machine and put a temporary public URL in
 front of it with a cloudflared quick tunnel.
 
+The one-command path: `./canary.sh --web path/to/program.ml` runs the whole
+pipeline, prints the shareable URL (also kept in `_vreplay/<program>/web/url`),
+and opens the TUI with the share running alongside; quitting the TUI ends the
+share (`VREPLAY_WEB_PORT` overrides the default port 8080). Prefer it when the
+user wants to capture and share a program in one go; the steps below are what
+its serving half does, and remain the way to serve an **existing** dump
+without rerunning the program.
+
 The URL is alive only while the tunnel process runs. That is intended — sharing
 here is for live presenting, not for publishing. Say so when you hand over the
 link, so nobody is surprised when it stops working.
