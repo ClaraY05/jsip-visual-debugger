@@ -211,11 +211,21 @@ both gitignored.
 5w. With `--web`, before the TUI opens: builds the interface's
    `app/web/server/serve.exe` on the OxCaml switch (its `bonsai_web`/
    `cohttp-async` deps are not in the TUI's set), serves the dump on
-   loopback (`VREPLAY_WEB_PORT`, default 8080), and opens a cloudflared
-   quick tunnel. The `trycloudflare.com` URL is printed and kept in
+   loopback, and opens a cloudflared quick tunnel. The
+   `trycloudflare.com` URL is printed and kept in
    `_vreplay/<prog>/web/url`; quitting the TUI tears the share down.
    The TUI runs as a child rather than `exec`'d so the exit trap can do
-   that. Needs `cloudflared` installed (checked up front); the
+   that.
+
+   The port is the first free one from 8080 up, and the run says so when
+   it is not 8080. `VREPLAY_WEB_PORT` pins it instead, and a pinned port
+   that is busy is an error naming what holds it — asking for a specific
+   port and silently getting another is worse than stopping. The search
+   exists because the server outlives its run more often than you would
+   like: the exit trap covers `HUP`/`INT`/`TERM` but cannot fire on
+   `SIGKILL`, and an orphaned `serve.exe` reparented to init keeps 8080
+   until somebody notices. Needs `cloudflared` installed (checked up
+   front); the
    `share-on-web` skill (`.claude/skills/share-on-web/`) documents the
    same flow for serving an existing dump by hand. Sharing caveat: the
    server's `api/source` extends local file read to whoever holds the

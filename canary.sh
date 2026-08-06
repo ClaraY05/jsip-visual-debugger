@@ -16,7 +16,8 @@
 # _vreplay/.toolchain/. Knobs: VREPLAY_SWITCH (library switch, default
 # jsip-vreplay), VREPLAY_TARGET (executable when a dune file declares
 # several), VREPLAY_DUMP_ONLY (stop once the dump is on disk),
-# VREPLAY_WEB_PORT (the web server's port, default 8080),
+# VREPLAY_WEB_PORT (pins the web server's port; unset, it takes the
+# first free one from 8080),
 # COMPILER_DIR / INTERFACE_DIR (override the submodule checkouts).
 set -euo pipefail
 
@@ -572,7 +573,48 @@ js_of_ocaml-ppx ppx_html"
   webdir="$work/web"
   rm -rf "$webdir"
   mkdir -p "$webdir"
-  port="${VREPLAY_WEB_PORT:-8080}"
+  # Bash opens a real connection here, so this answers the question that
+  # matters -- is anything accepting on that port -- without needing ss,
+  # lsof or root.
+  port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1; }
+  # Whoever holds it, as "name (pid N)". Blank when ss is absent, or when
+  # the holder belongs to another user and the kernel withholds the pid.
+  port_holder() {
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -ltnp "sport = :$1" 2>/dev/null |
+      grep -oE '\("[^"]+",pid=[0-9]+' | head -1 |
+      sed 's/^("\([^"]*\)",pid=\([0-9]*\)$/\1 (pid \2)/'
+  }
+
+  # The server outliving its run is the normal failure here: the exit
+  # trap cannot fire on SIGKILL, and a serve.exe reparented to init holds
+  # the port until someone notices. Rather than die on a leftover, walk
+  # up to the first free port -- but only when the port was not asked
+  # for. A pinned VREPLAY_WEB_PORT is a request, so report it and stop.
+  if [ -n "${VREPLAY_WEB_PORT:-}" ]; then
+    port="$VREPLAY_WEB_PORT"
+    if port_in_use "$port"; then
+      holder="$(port_holder "$port")"
+      die "VREPLAY_WEB_PORT=$port is already in use\
+${holder:+ by $holder}. Free it, or unset VREPLAY_WEB_PORT to let \
+canary pick a port. A stray serve.exe is usually an earlier --web run \
+that was killed before it could clean up."
+    fi
+  else
+    port=8080
+    port_last=8099
+    while port_in_use "$port"; do
+      [ "$port" -lt "$port_last" ] ||
+        die "no free port between 8080 and $port_last; set \
+VREPLAY_WEB_PORT to one that is free"
+      port=$((port + 1))
+    done
+    if [ "$port" != 8080 ]; then
+      holder="$(port_holder 8080)"
+      say "port 8080 is taken${holder:+ by $holder}; serving on $port"
+    fi
+  fi
+
   serve_args=(-dump-file "$dump" -source-root "$source_root" -port "$port")
   [ -f "$heat" ] && serve_args+=(-perf-file "$heat")
 
@@ -580,10 +622,14 @@ js_of_ocaml-ppx ppx_html"
     >"$webdir/serve.log" 2>&1 &
   serve_pid=$!
   tunnel_pid=""
-  trap 'kill $serve_pid $tunnel_pid 2>/dev/null || true; rm -f "$webdir/url"' EXIT INT TERM
+  # HUP as well as INT and TERM: closing the terminal is exactly how the
+  # orphans above get made. SIGKILL still cannot be caught, which is why
+  # the port search above exists.
+  trap 'kill $serve_pid $tunnel_pid 2>/dev/null || true; rm -f "$webdir/url"' \
+    EXIT HUP INT TERM
   while ! grep -q 'jsip web debugger' "$webdir/serve.log" 2>/dev/null; do
     kill -0 "$serve_pid" 2>/dev/null ||
-      die "the web server died (port $port taken?); see ${webdir#"$root/"}/serve.log"
+      die "the web server died; see ${webdir#"$root/"}/serve.log"
     sleep 0.2
   done
 
