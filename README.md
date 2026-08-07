@@ -53,7 +53,11 @@ instrumented `_build` is never left behind in the project's checkout.
 the browser interface behind a temporary public URL, so someone who is
 not at this machine can open the visualizer:
 
-- The URL is a cloudflared quick tunnel to a web server on loopback.
+- The URL is a cloudflared quick tunnel to a web server on loopback
+  (`VREPLAY_WEB_PORT`, default 8080).
+- The web server builds on the perf job's switch (`JSIP_HEAT_SWITCH`,
+  default `5.2.0+ox`) — its libraries are not in the TUI's dependency
+  set, which is why it has its own one-time install below.
 - The `trycloudflare.com` link is printed and kept in
   `_vreplay/<program>/web/url`.
 - The script stays in the foreground; Ctrl-C ends the share.
@@ -101,7 +105,8 @@ without rerunning the program. How it works:
   process.
 
 One-time, after installing cloudflared (the web app's libraries are not
-in the TUI's dependency set):
+in the TUI's dependency set; `5.2.0+ox` below is the default — use your
+`JSIP_HEAT_SWITCH` if you run the pipeline with a different one):
 
 ```sh
 opam install --switch 5.2.0+ox -y bonsai_web async_js cohttp-async \
@@ -123,6 +128,17 @@ jsip-debugger-interface/_build/default/app/web/server/serve.exe \
 cloudflared tunnel --url http://127.0.0.1:8080 --config /dev/null \
   --no-autoupdate                               # in a second terminal
 ```
+
+The example is a standalone-mode run; the flags in general:
+
+- `-dump-file` — `_vreplay/<program>/<program>.dump`.
+- `-source-root` — the scratch build context
+  `_vreplay/<program>/build/_build/default` in standalone mode (as
+  above), but the **project's own root** in project mode.
+- `-perf-file` — `_vreplay/<program>/heat.sexp`, only when the perf
+  job wrote one; omit it otherwise.
+- `-port` — default 8080. If that port is taken, pass another and
+  point cloudflared's `--url` at the same one.
 
 The shareable URL is in cloudflared's startup banner (on stderr);
 teardown is Ctrl-C on both processes. Gotchas:
