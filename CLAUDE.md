@@ -136,9 +136,9 @@ pipeline. The argument can also be a **directory** (a multi-file program
 entering at `main.ml`, the rest ordinary dependency modules) or a
 **`.exe`** naming a dune target instead of a source file.
 `COMPILER_DIR`/`INTERFACE_DIR` override the submodule checkouts, for
-running against clones ahead of the pins. `--web` additionally serves
-the replay behind a shareable public URL while the TUI is open — see
-step 5w and README.md's sharing section.
+running against clones ahead of the pins. `--web` serves the replay
+behind a shareable public URL instead of opening the TUI — see step 5w
+and README.md's sharing section.
 
 The examples: `map_demo.ml` (one map, built and trimmed), `map_fold.ml`,
 `calculator/` (multi-file — lexer → parser → evaluator over a `Map`
@@ -208,14 +208,14 @@ both gitignored.
    interface advertises that flag (the pinned interface now does; the
    probe protects runs against older checkouts, where the unknown
    option is an error). `q` quits, back to your shell.
-5w. With `--web`, before the TUI opens: builds the interface's
+5w. With `--web`, instead of step 5: builds the interface's
    `app/web/server/serve.exe` on the OxCaml switch (its `bonsai_web`/
    `cohttp-async` deps are not in the TUI's set), serves the dump on
    loopback (`VREPLAY_WEB_PORT`, default 8080), and opens a cloudflared
    quick tunnel. The `trycloudflare.com` URL is printed and kept in
-   `_vreplay/<prog>/web/url`; quitting the TUI tears the share down.
-   The TUI runs as a child rather than `exec`'d so the exit trap can do
-   that. Needs `cloudflared` installed (checked up front); the
+   `_vreplay/<prog>/web/url`; the script stays in the foreground until
+   Ctrl-C, and the exit trap tears the share down.
+   Needs `cloudflared` installed (checked up front); the
    `share-on-web` skill (`.claude/skills/share-on-web/`) documents the
    same flow for serving an existing dump by hand. Sharing caveat: the
    server's `api/source` extends local file read to whoever holds the

@@ -8,9 +8,9 @@
 # libraries); 3. compile with -visual-replay -- in place if the file is
 # already a dune target, else wrapped in a scratch project -- while 3b
 # profiles an uninstrumented twin in the background; 4. run it, events
-# going to the dump; 5. exec the TUI on the dump -- with --web, the
-# browser interface is served behind a shareable trycloudflare.com URL
-# alongside the TUI, and quitting the TUI ends the share.
+# going to the dump; 5. exec the TUI on the dump -- or, with --web,
+# serve the browser interface behind a shareable trycloudflare.com URL
+# instead of the TUI, until Ctrl-C ends the share.
 #
 # Artifacts: _vreplay/<program-name>/; shared toolchain:
 # _vreplay/.toolchain/. Knobs: VREPLAY_SWITCH (library switch, default
@@ -39,8 +39,8 @@ fi
   die "usage: ./canary.sh [--web] path/to/program.ml [args...]
              ./canary.sh [--web] path/to/program-dir [args...]
              ./canary.sh [--web] path/to/target.exe [args...]
---web also serves the replay behind a shareable public URL while the
-TUI is open"
+--web serves the replay behind a shareable public URL instead of
+opening the TUI; Ctrl-C ends the share"
 prog="${1%/}"
 shift
 prog_args=("$@")
@@ -557,9 +557,9 @@ fi
 # The web server is self-contained (the js_of_ocaml client is embedded in
 # serve.exe) and binds loopback only; a cloudflared quick tunnel is the
 # one doorway in. It builds on the ordinary OxCaml switch -- the TUI's
-# dependencies do not cover bonsai_web. The share runs alongside the TUI
-# that step 5 opens next, and the exit trap tears it down when the TUI
-# closes.
+# dependencies do not cover bonsai_web. The share replaces the TUI: the
+# script stays in the foreground until Ctrl-C, and the exit trap tears
+# the share down.
 if [ -n "$web" ]; then
   web_switch="${JSIP_HEAT_SWITCH:-5.2.0+ox}"
   say "building the web interface (switch $web_switch)"
@@ -618,10 +618,12 @@ js_of_ocaml-ppx ppx_html"
   printf '%s\n' "$url" >"$webdir/url"
   say "shareable link: $url"
   say "  (kept in ${webdir#"$root/"}/url while the share is up)"
-  say "  alive only while the TUI is open -- quitting it ends the share"
   say "  unguessable, not private: anyone with the link can use the replay,"
   say "  and its api/source lets them read files off this machine"
   say "  a viewer who sees nothing is likely on a network blocking trycloudflare.com"
+  say "sharing (Ctrl-C ends the share)"
+  wait "$serve_pid" "$tunnel_pid" || true
+  exit 0
 fi
 
 # --- 5. hand the dump to the interface --------------------------------------
@@ -642,8 +644,4 @@ elif [ -f "$heat" ]; then
   say "note: this interface has no -perf-file; heat profile written but not shown"
 fi
 say "replaying in the TUI (q quits, arrows step)"
-[ -n "$web" ] || exec "$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
-# With the share up, exec would orphan it past the exit trap: run the
-# TUI as a child instead, so closing it tears the share down.
-"$interface/_build/default/app/bin/main.exe" "${app_args[@]}" || true
-say "TUI closed; tearing down the share at $url"
+exec "$interface/_build/default/app/bin/main.exe" "${app_args[@]}"
