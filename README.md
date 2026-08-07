@@ -14,8 +14,8 @@ programs that:
 - use **Async**;
 - use **bin_io**;
 - are **long running** — the dump grows with every event and load time
-  scales with the capture, so record a bounded window and trim it, as
-  *Capturing a long-running program* shows below.
+  scales with the capture (`VREPLAY_DUMP_ONLY=1` captures a bounded
+  window without opening the TUI).
 
 ### Running it
 
@@ -133,84 +133,7 @@ teardown is Ctrl-C on both processes. Gotchas:
   `--protocol http2` rather than waiting out cloudflared's own slow
   fallback.
 
-### Capturing a long-running program
-
-A server-style program runs until interrupted, so capture first and
-replay after — `VREPLAY_DUMP_ONLY` stops the pipeline once the dump is
-on disk. The order book stands in for the long-running target below;
-substitute your own, as above:
-
-```sh
-VREPLAY_DUMP_ONLY=1 ./canary.sh examples/order_book/order_book.exe
-# a program that does not end on its own: let it run 15–30 seconds,
-# then Ctrl-C
-
-sed -i '${/^[{}]*$/d}' _vreplay/order_book/order_book.dump  # drop the torn final marker line
-```
-
-The heat profile comes with it:
-
-- the perf job runs for any program, project mode included, and
-  `VREPLAY_DUMP_ONLY` waits for it before exiting;
-- only a program you interrupt needs doing by hand, since the job
-  records a run that ends on its own:
-
-```sh
-dune build examples/order_book/order_book.exe
-
-perf record -F max -o /tmp/order_book.perf.data -- \
-  _build/default/examples/order_book/order_book.exe
-  # same 15–30 seconds, then Ctrl-C
-
-perf report -i /tmp/order_book.perf.data --stdio --dsos order_book.exe \
-  --percent-limit 0 -F sample,sym |
-  dune exec bin/perf_heat_interface.exe -- Order_book _vreplay/order_book/heat.sexp
-```
-
-About that recording:
-
-- Record without `-g`: the distiller reads the flat report, and a
-  callchain one is mostly lines it cannot parse.
-- `Order_book` is the profiled program's entry module — it breaks ties
-  between a function of yours and a same-named library one.
-- The distiller exits 3 if fewer than 2000 samples landed in OCaml
-  code — record for longer.
-
-Now replay, with `-perf-file` for the heat and the interface built by
-hand (stopping at the dump also stops before the step that builds it):
-
-```sh
-(cd jsip-debugger-interface && dune build --root . app/bin/main.exe)
-
-jsip-debugger-interface/_build/default/app/bin/main.exe \
-  -dump-file _vreplay/order_book/order_book.dump \
-  -source-root . \
-  -perf-file _vreplay/order_book/heat.sexp
-```
-
-Worth knowing for this workflow:
-
-- `-source-root` is the project root in project mode — here this repo
-  itself — and the scratch build context for a loose `.ml` or
-  directory; the `VREPLAY_DUMP_ONLY` run prints the exact flags for
-  its capture.
-- The heat colors each callee's name in the call stack by its share of
-  sampled compute. It matches by function name and module, so it is a
-  different run's statistics laid over this run's calls, and a callee
-  the optimizer inlined away — `Hashtbl.incr`,
-  `Order_queue.enqueue_back_exn` — has no symbol to match and stays
-  uncolored.
-- Interrupting mid-event tears the dump's last line, which the reader
-  rejects — the `sed` above deletes it.
-- Load time scales with the capture: a two-minute run is ~18k events
-  and takes about a minute to open; 20–30 seconds opens in seconds. On
-  a dump that size the navigation aids earn their keep: `/` filters
-  structures, `z` is accordion mode, `h` collapses at the cursor.
-- A foreign checkout must build against the toolchain's library
-  versions — expect a small, mechanical compatibility pass if it pins
-  newer ones.
-
-Alongside all that it runs a **perf job**, in the background, for every
+The pipeline also runs a **perf job**, in the background, for every
 kind of program including a project built in place:
 
 - The job builds a second copy of the program with no instrumentation
