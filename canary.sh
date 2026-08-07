@@ -83,8 +83,11 @@ mkdir -p "$work"
 # --- 1. the forked compiler -------------------------------------------------
 # Bytecode `make world` (the fork has native support now; the pipeline
 # has not moved onto it), installed to its own _install prefix so tools
-# see an installed-shaped lib dir, validated with one golden-dump test,
-# and redone when the pinned commit changes (the .built-rev stamp).
+# see an installed-shaped lib dir, and redone when the pinned commit
+# changes (the .built-rev stamp). Whether the fork is CORRECT is the
+# fork's own question -- its golden-dump suite lives in its repo and runs
+# in its CI. All this asks is whether the build produced the pieces the
+# pipeline goes on to use.
 prefix="$compiler/_install"
 ocamlrun="$prefix/bin/ocamlrun"
 
@@ -92,24 +95,41 @@ want_rev="$(git -C "$compiler" rev-parse HEAD)"
 built_rev="$(cat "$prefix/.built-rev" 2>/dev/null || true)"
 
 if [ "$built_rev" != "$want_rev" ] || ! [ -f "$compiler/vreplay/src/vreplay.cma" ]; then
-  say "building the forked compiler at ${want_rev:0:12} (~10 min from scratch)"
+  say "building the forked compiler at ${want_rev:0:12} (~4 min from scratch)"
+  # A rev bump is not safely incremental, so the build starts from a
+  # clean tree. make only compares the mtimes of prerequisites that still
+  # EXIST, so a source REMOVED from a list leaves everything generated
+  # from that list stale for good. The fork moved caml_wire_emit and
+  # caml_wire_traverse out of the runtime into the vreplay C stubs; a
+  # carried-over runtime/primitives keeps naming them, prims.c inherits
+  # it, and linking runtime/ocamlrun dies on two undefined references.
+  # Deleting just those two gets one step further and then dies in
+  # ocamlmklib with "unknown C primitive", the bytecode tools having been
+  # linked against the old table themselves. Nothing short of this makes
+  # .built-rev mean what it says. distclean needs a configured tree and
+  # takes Makefile.config with it, so it is tolerated and reconfigure
+  # follows.
+  (cd "$compiler" && [ -f Makefile.config ] && make distclean) >/dev/null 2>&1 ||
+    true
   # `make install` aborts at tools/ocamldep.opt on a bytecode-only tree,
   # after everything we need is in place: tolerate it and hand-finish.
-  # The old _install goes first: the golden test runs before install,
-  # and +vreplay resolves into _install, where a previous rev's
-  # vreplay.cmi would shadow the freshly built library.
+  # The old _install goes first so the new one cannot inherit a previous
+  # rev's files under names this one no longer installs -- +vreplay
+  # resolves into _install, so a leftover vreplay.cmi there would shadow
+  # the freshly built library.
   (cd "$compiler" &&
     rm -rf _install &&
     { [ -f Makefile.config ] || ./configure -C --prefix "$compiler/_install"; } &&
     make -j"$(nproc)" world &&
-    vreplay/tests/run_tests.sh map_basic &&
     { make install || true; } &&
     ln -sf ocamlc.byte _install/bin/ocamlc &&
     ln -sf ocamldep.byte _install/bin/ocamldep &&
     cp -p Makefile.config _install/lib/ocaml/Makefile.config &&
     [ -f _install/bin/ocamlrun ] &&
     [ -f _install/lib/ocaml/stdlib.cma ] &&
-    [ -f _install/lib/ocaml/runtime-launch-info ]) \
+    [ -f _install/lib/ocaml/runtime-launch-info ] &&
+    [ -f vreplay/src/vreplay.cma ] &&
+    [ -f vreplay/src/libvreplaybyt.a ]) \
     >"$root/_vreplay/compiler-build.log" 2>&1 ||
     die "compiler build failed; see _vreplay/compiler-build.log"
   printf '%s\n' "$want_rev" >"$prefix/.built-rev"

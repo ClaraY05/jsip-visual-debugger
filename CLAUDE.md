@@ -152,12 +152,27 @@ container it is in; 189 events, six `ds_type`s). Artifacts go under
 both gitignored.
 
 1. Builds the forked compiler whenever the pinned submodule commit
-   changes (stamped in `_install/.built-rev`): configure to
-   `_install`, bytecode `make world`, one of the fork's golden-dump
-   cases as validation, the tolerated partial install, hand-finished
-   `ocamlc`/`ocamldep` symlinks. 3½–4¼ min from scratch on 4 cores (two
-   measured builds: 3 min 35 s and 4 min 16 s, 464 `.cmo`s each with
-   nothing reused); log at `_vreplay/compiler-build.log`.
+   changes (stamped in `_install/.built-rev`): `make distclean`,
+   configure to `_install`, bytecode `make world`, the tolerated partial
+   install, hand-finished `ocamlc`/`ocamldep` symlinks, and a check that
+   the pieces the pipeline goes on to use are actually there. It runs no
+   tests: whether the fork is *correct* is the fork's own question, and
+   its golden-dump suite lives in its repo and runs in its CI.
+   3½–4¼ min from scratch on
+   4 cores (two measured builds: 3 min 35 s and 4 min 16 s, 464 `.cmo`s
+   each with nothing reused); log at `_vreplay/compiler-build.log`.
+
+   That rebuild is from scratch on purpose. make only compares the
+   mtimes of prerequisites that still *exist*, so a source dropped from a
+   list leaves everything generated from that list stale for good —
+   deleting a source can never invalidate a target. When the fork moved
+   `caml_wire_emit` and `caml_wire_traverse` out of the runtime into the
+   vreplay C stubs, every existing checkout kept a `runtime/primitives`
+   naming them, and linking `runtime/ocamlrun` died on two undefined
+   references; deleting that file and `prims.c` only reaches
+   `ocamlmklib`, which dies with `unknown C primitive` because the
+   bytecode tools embed the old table themselves. Nothing cheaper makes
+   `.built-rev` mean what it says.
 2. Assembles a toolchain — see below — pairing the fork's compiler with
    an opam switch's libraries.
 3. Compiles with `-visual-replay`, in one of two modes:
