@@ -187,19 +187,6 @@ needs a switch built by the fork's own compiler and how that is wired up.
 
 ---
 
-This repo's own OCaml code (the `canary` package) is in the Jane Street
-style:
-
-- [`Core`](https://opam.ocaml.org/packages/core/) as the standard
-  library
-- `ppx_jane` for deriving
-- `dune` for builds
-- expect tests
-- the `janestreet` ocamlformat profile
-
-The generated `canary.opam` is produced by dune from `dune-project` — don't
-edit it by hand; it regenerates on the next `dune build`.
-
 ## Build, test, format
 
 ```sh
